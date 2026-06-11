@@ -12,6 +12,12 @@ Built using only open-source libraries
 > and exports a clean DXF with optional common-line cutting. Part-in-part,
 > non-rectangular sheets and NFP optimization are *future* work.
 
+![CAD-N main window: 46 mixed parts nested on one 640x460 sheet at 71.6% utilization](assets/screenshot.png)
+
+*46 parts (imported DXF shapes + manual rectangles) nested on a single sheet at
+71.6% utilization — regenerate this screenshot any time with
+`python tools/screenshot_gui.py`.*
+
 ---
 
 ## What it does

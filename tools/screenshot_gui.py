@@ -38,13 +38,13 @@ def main() -> None:
     res = imp.extract(doc, "combined.dxf", imp.ImportOptions(),
                       imp.summarize(doc, "combined.dxf"))
     for p in res.parts:
-        p.quantity = 5
+        p.quantity = 8
     win.parts.extend(res.parts)
-    win.add_rectangle("Bracket", 140, 90, 6)
-    win.add_rectangle("Spacer", 60, 60, 10)
+    win.add_rectangle("Bracket", 140, 90, 8)
+    win.add_rectangle("Spacer", 60, 60, 14)
 
-    win.sp_sheet_w.setValue(800)
-    win.sp_sheet_h.setValue(500)
+    win.sp_sheet_w.setValue(640)
+    win.sp_sheet_h.setValue(460)
     win.sp_spacing.setValue(4)
     win.sp_attempts.setValue(5)
     win._refresh_part_table()
@@ -63,9 +63,12 @@ def main() -> None:
         app.processEvents()
 
     path = OUT / "gui_main_window.png"
-    win.grab().save(str(path))
-    print(f"wrote {path}  (nested {result.total_parts_nested} parts on "
-          f"{result.sheet_count_used} sheet(s), util {result.total_utilization*100:.1f}%)")
+    shot = win.grab()
+    shot.save(str(path))
+    # Also refresh the README screenshot (tracked in the repo).
+    shot.save(str(ROOT / "assets" / "screenshot.png"))
+    print(f"wrote {path} + assets/screenshot.png  (nested {result.total_parts_nested} "
+          f"parts on {result.sheet_count_used} sheet(s), util {result.total_utilization*100:.1f}%)")
 
 
 if __name__ == "__main__":
