@@ -1,0 +1,24 @@
+CAD-N
+Copyright (c) 2026 quanta-guy
+Licensed under the MIT License. See the LICENSE file.
+
+This product bundles third-party open-source software. A full inventory with
+license texts is in THIRD_PARTY_LICENSES.md and the LICENSES/ folder.
+
+LGPL notice
+-----------
+This application uses the following libraries under the GNU Lesser General Public
+License, as dynamically linked shared libraries:
+
+  * Qt and PySide6  — LGPL-3.0 — https://www.qt.io/licensing
+  * GEOS (via Shapely) — LGPL-2.1 — https://libgeos.org/
+
+You are entitled to obtain the source code of these libraries and to replace them
+with your own compatible builds. In packaged releases they are shipped as separate
+replaceable shared libraries (DLLs) in the application directory; you may substitute
+them, or install your own copies via `pip install PySide6 shapely`. The
+corresponding license texts are provided with this distribution and at the URLs
+above.
+
+CAD-N's own source code is licensed under the MIT License and is not a derivative
+work of these LGPL libraries.

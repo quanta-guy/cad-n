@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cad-n"
+version = "0.4.0"
+description = "CAD-N - 2D true-shape nesting tool for DXF parts on rectangular sheet stock"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "quanta-guy" }]
+keywords = ["nesting", "dxf", "cnc", "cad", "sheet-metal", "packing", "true-shape"]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Operating System :: Microsoft :: Windows",
+    "Topic :: Scientific/Engineering",
+    "Intended Audience :: Manufacturing",
+]
+dependencies = [
+    "PySide6==6.11.1",
+    "ezdxf==1.4.4",
+    "shapely==2.1.2",
+    "numpy==2.4.6",
+]
+
+[project.optional-dependencies]
+dev = ["pytest==9.0.3", "matplotlib==3.10.9", "pillow==12.2.0", "pyinstaller>=6.11"]
+
+[project.gui-scripts]
+cad-n = "cad_n.main:main"
+
+[tool.setuptools.packages.find]
+include = ["cad_n*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --tb=short"
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.cad_n]
+# Build-time metadata consumed by the version banner and packaging scripts.
+app_name = "CAD-N"

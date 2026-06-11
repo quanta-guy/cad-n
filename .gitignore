@@ -1,0 +1,31 @@
+.venv/
+# Local Claude Code settings — machine-specific paths + permission allowlist
+.claude/settings.local.json
+__pycache__/
+*.pyc
+*.egg-info/
+# build/ holds packaging *source* (spec, installer, launcher, version resource) at
+# its root, but is also the PyInstaller/setuptools work dir (lib/, dist/, cad_n/,
+# bdist.*). Ignore everything under build/ except the tracked source files.
+build/*
+!build/cad_n.spec
+!build/installer.iss
+!build/launch.py
+!build/version_info.txt
+dist/
+release/
+.pytest_cache/
+_env_check.py
+*.spec.bak
+# Generated artifacts from tooling (kept out of VCS; regenerate with tools/)
+tests/_visual_out/
+benchmarks_out/
+# Third-party DXFs downloaded from external repos (their own licenses);
+# regenerate locally with: python tools/fetch_real_dxf.py
+tests/real_dxf/
+# Private / internal-only material — kept locally, never published
+# (confidential vendor analysis, real customer DXFs, etc.)
+archive/
+# Company-branded assets for internal builds (set CADN_INTERNAL=1).
+# The public build uses the neutral logo in assets/.
+branding/
