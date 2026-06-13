@@ -5,6 +5,13 @@ All notable changes to CAD-N are recorded here.
 ## [Unreleased]
 
 ### Added
+- **Best-nests log**: after each successful nest, the result is offered to a
+  persistent log that keeps only the **highest-utilization** nests (a "best
+  nests" leaderboard, de-duplicated and capped). Open it from **File → Best
+  nests…** or the *Best nests…* button to browse them (utilization, sheets,
+  parts, when, source) and load one back into the preview to view, export, or
+  re-run. The log is stored per-user under the CAD-N data directory and survives
+  restarts (`CADN_HISTORY_PATH` overrides the location).
 - **Internal cut preservation (micro-joints / chases)**: open cut linework that
   lies inside a part's outer boundary — micro-joint tabs and "chase" outlines
   drawn as gapped or open segments — is now kept verbatim instead of being

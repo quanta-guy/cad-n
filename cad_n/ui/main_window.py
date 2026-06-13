@@ -46,15 +46,21 @@ from ..core import dxf_importer as imp
 from ..core import job_io, reports
 from ..core.models import (
     NestingSettings,
+    Part,
     PlacementStrategy,
     Severity,
     Sheet,
     make_rectangle_part,
 )
+from ..core.nest_history import NestHistory, make_record, result_from_dict
+from ..logging_setup import get_logger
+from .best_nests_dialog import BestNestsDialog
 from .import_dialog import ImportDialog
 from .nest_worker import NestWorker
 from .preview_canvas import PreviewCanvas
 from .settings_dialog import SettingsDialog
+
+log = get_logger("main_window")
 
 _ROT_OPTIONS = [
     ("0 / 90 / 180 / 270", 90.0),
@@ -112,6 +118,11 @@ class MainWindow(QMainWindow):
         self.job_path: str | None = None
         self.last_export_path: str | None = None
         self._worker: NestWorker | None = None
+        # Persistent log of the highest-utilization nests, and a snapshot of the
+        # inputs of the nest currently running (so a finished nest can be logged).
+        self.history = NestHistory.load()
+        self._pending_parts: list = []
+        self._pending_settings: NestingSettings | None = None
 
         self._build_ui()
         self._build_menu()
@@ -244,10 +255,14 @@ class MainWindow(QMainWindow):
             "Merge the coincident edges of butting parts into a single cut.\n"
             "Shared edges are placed on the COMMON_CUT layer. Set part "
             "spacing to 0 so parts share edges. Verify cut order before cutting.")
+        self.btn_best = QPushButton("Best nests...")
+        self.btn_best.setToolTip("Browse the highest-utilization nests and reload one into the preview.")
+        self.btn_best.clicked.connect(self.on_best_nests_clicked)
         self.btn_export = QPushButton("Export DXF..."); self.btn_export.clicked.connect(self.on_export_dxf_clicked)
         self.btn_csv = QPushButton("Export report (CSV)..."); self.btn_csv.clicked.connect(self.on_export_csv_clicked)
         self.btn_export.setEnabled(False); self.btn_csv.setEnabled(False)
-        bh.addWidget(self.chk_common); bh.addWidget(self.btn_export); bh.addWidget(self.btn_csv)
+        bh.addWidget(self.chk_common); bh.addWidget(self.btn_best)
+        bh.addWidget(self.btn_export); bh.addWidget(self.btn_csv)
 
         centre_and_bottom = QSplitter(Qt.Vertical)
         centre_and_bottom.addWidget(centre)
@@ -273,6 +288,8 @@ class MainWindow(QMainWindow):
             (None, None),
             ("Save job...", self.on_save_job_clicked),
             ("Load job...", self.on_load_job_clicked),
+            (None, None),
+            ("Best nests...", self.on_best_nests_clicked),
             (None, None),
             ("Export nested DXF...", self.on_export_dxf_clicked),
             ("Export report (CSV)...", self.on_export_csv_clicked),
@@ -380,6 +397,8 @@ class MainWindow(QMainWindow):
         self._worker = NestWorker(list(self.parts), sheets, settings)
         self._pending_sheets = sheets
         self._pending_sheet = sheets[0]
+        self._pending_parts = list(self.parts)
+        self._pending_settings = settings
         self._worker.progress.connect(self._on_progress)
         self._worker.done.connect(self._on_nest_done)
         self._worker.failed.connect(self._on_nest_failed)
@@ -406,6 +425,23 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(
             f"Done: {result.total_parts_nested} placed on {result.sheet_count_used} sheet(s) "
             f"in {result.runtime_sec:.1f}s.")
+        self._log_best_nest(result)
+
+    def _log_best_nest(self, result) -> None:
+        """Offer a finished nest to the best-nests log (kept only if it ranks)."""
+        if not result or result.sheet_count_used <= 0:
+            return
+        try:
+            rec = make_record(
+                result,
+                self._pending_parts or self.parts,
+                self._pending_sheets or self.build_sheets(),
+                self._pending_settings or self.build_settings(),
+                self.source_files,
+            )
+            self.history.consider(rec)
+        except Exception:  # noqa: BLE001 - logging a nest must never break nesting
+            log.exception("could not log nest to best-nests history")
 
     def _populate_configs(self, result) -> None:
         """Fill the configuration chooser when several stock mixes were tried."""
@@ -555,6 +591,65 @@ class MainWindow(QMainWindow):
         self._refresh_part_table()
         self._append_warnings(job.notices, clear=True)
         self.statusBar().showMessage(f"Loaded job: {job.job_name} ({len(self.parts)} parts)")
+
+    # -------------------------------------------------------------- best nests #
+    def on_best_nests_clicked(self) -> None:
+        if not self.history.records:
+            QMessageBox.information(
+                self, "Best nests",
+                "No nests logged yet. Run a nest and the highest-utilization "
+                "results are saved here automatically.")
+            return
+        dlg = BestNestsDialog(self.history, self)
+        if dlg.exec() == QDialog.Accepted and dlg.selected_record is not None:
+            self._load_nest_record(dlg.selected_record)
+
+    def _load_nest_record(self, rec) -> None:
+        """Restore a logged nest: its parts/sheets/settings snapshot plus the saved
+        layout, so it can be previewed, exported, or re-run."""
+        payload = rec.payload or {}
+        self.parts = [Part.from_dict(d) for d in payload.get("parts", [])]
+        self.source_files = list(rec.source_files)
+
+        sheets = [Sheet.from_dict(d) for d in payload.get("sheets", [])]
+        if sheets:
+            a = sheets[0]
+            self.sp_sheet_w.setValue(a.width_mm); self.sp_sheet_h.setValue(a.height_mm)
+            self.sp_margin.setValue(a.margin_mm)
+            self.sp_sheet_qty.setValue(min(int(a.quantity_available), 100000))
+            if len(sheets) > 1:
+                b = sheets[1]
+                self.sp_sheet2_w.setValue(b.width_mm); self.sp_sheet2_h.setValue(b.height_mm)
+                self.sp_sheet2_qty.setValue(min(int(b.quantity_available), 100000))
+                self.chk_sheet2.setChecked(True)
+            else:
+                self.chk_sheet2.setChecked(False)
+
+        s = NestingSettings.from_dict(payload.get("settings"))
+        self.sp_spacing.setValue(s.part_spacing_mm); self.sp_kerf.setValue(s.kerf_mm)
+        self.sp_attempts.setValue(s.attempt_count); self.sp_timelimit.setValue(s.time_limit_sec)
+        for i, (_, val) in enumerate(_ROT_OPTIONS):
+            if val == s.rotation_step_deg:
+                self.cb_rot.setCurrentIndex(i); break
+        for i, (_, val) in enumerate(_STRATEGY_OPTIONS):
+            if val == s.placement_strategy:
+                self.cb_strategy.setCurrentIndex(i); break
+
+        result = result_from_dict(payload.get("result", {}))
+        self.result = result
+        self._active_result = result
+        self._pending_sheets = sheets
+        self._pending_sheet = sheets[0] if sheets else None
+        self._pending_parts = list(self.parts)
+        self._pending_settings = s
+        self._populate_configs(result)
+        self.canvas.set_result(result)
+        self._update_sheet_nav()
+        self._update_summary()
+        self.btn_export.setEnabled(result.sheet_count_used > 0)
+        self.btn_csv.setEnabled(result.sheet_count_used > 0)
+        self._refresh_part_table()
+        self.statusBar().showMessage(f"Loaded best nest: {rec.label}")
 
     # --------------------------------------------------------------- tables #
     def on_advanced_clicked(self) -> None:

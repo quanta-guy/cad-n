@@ -17,11 +17,18 @@ from pathlib import Path
 _CONFIGURED = False
 
 
-def log_dir() -> Path:
-    """Per-user log directory that survives packaging as an .exe."""
+def data_dir() -> Path:
+    """Per-user data directory (best-nest log, etc.) that survives packaging."""
     base = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
     root = Path(base) if base else Path.home()
-    d = root / "CAD-N" / "logs"
+    d = root / "CAD-N"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def log_dir() -> Path:
+    """Per-user log directory that survives packaging as an .exe."""
+    d = data_dir() / "logs"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
