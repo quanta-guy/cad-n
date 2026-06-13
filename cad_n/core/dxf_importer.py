@@ -18,6 +18,7 @@ from typing import Optional
 import ezdxf
 from ezdxf import path as ezpath
 from ezdxf import recover
+from shapely.geometry import LineString, Polygon
 
 from ..config import DEFAULT_TOLERANCES, Tolerances
 from ..logging_setup import get_logger
@@ -395,9 +396,38 @@ def extract(doc, path: str, options: ImportOptions, summary: Optional[DxfSummary
             )
         )
 
+    # Preserve open internal cut linework (micro-joints / chase outlines) by
+    # attaching each leftover open path to the part whose boundary contains it.
+    internals_by_idx, orphan_open = _assign_internal_paths(
+        clean.polygons, clean.internal_paths, tol.snap_tolerance_mm
+    )
+
     stem = os.path.splitext(os.path.basename(path))[0]
-    parts = _polygons_to_parts(clean.polygons, stem, path, options.group_identical)
+    parts = _polygons_to_parts(
+        clean.polygons, stem, path, options.group_identical, internals_by_idx
+    )
     result.parts = parts
+
+    preserved = sum(len(v) for v in internals_by_idx.values())
+    if preserved:
+        result.notices.append(
+            Notice(
+                f"{preserved} internal cut line(s) (micro-joints / internal cuts) kept "
+                "with their part(s).",
+                Severity.INFO,
+                code="INTERNAL_CUTS_KEPT",
+            )
+        )
+    if orphan_open:
+        result.notices.append(
+            Notice(
+                f"{orphan_open} open contour(s) not inside any part were skipped. Open "
+                "geometry is only kept when it lies inside a closed part boundary.",
+                Severity.WARNING,
+                code="OPEN_CONTOUR",
+            )
+        )
+
     if parts:
         result.notices.append(
             Notice(
@@ -424,37 +454,74 @@ def _shape_signature(poly, q: float = 0.1) -> tuple:
     return (len(ext), len(poly.interiors), r(poly.area), r(poly.length), edges)
 
 
-def _polygons_to_parts(polygons, stem, path, group_identical) -> list[Part]:
+def _assign_internal_paths(polygons, paths, snap_tol: float = 0.05):
+    """Attach each leftover open path to the smallest-area part whose outer
+    boundary encloses it. A path is "inside" a part if the part's filled
+    exterior (holes ignored, grown by the snap tolerance) covers the whole line
+    -- this keeps edge micro-joints that lie exactly on a part's cut edge, not
+    just strictly-interior cuts. Returns ``(internals_by_index, orphan_count)``."""
+    internals: dict[int, list] = {}
+    orphans = 0
+    if not paths:
+        return internals, orphans
+    grow = max(snap_tol, 1e-9)
+    solids: list[tuple] = []
+    for idx, poly in enumerate(polygons):
+        try:
+            filled = Polygon(poly.exterior.coords)
+            if not filled.is_valid:
+                filled = filled.buffer(0)
+            filled = filled.buffer(grow)
+        except Exception:  # noqa: BLE001
+            continue
+        if not filled.is_empty:
+            solids.append((filled.area, idx, filled))
+    solids.sort(key=lambda t: t[0])  # smallest first so nested parts win ties
+
+    for path in paths:
+        if len(path) < 2:
+            continue
+        try:
+            line = LineString(path)
+        except Exception:  # noqa: BLE001
+            continue
+        hit = None
+        for _area, idx, filled in solids:
+            if filled.covers(line):
+                hit = idx
+                break
+        if hit is None:
+            orphans += 1
+            continue
+        internals.setdefault(hit, []).append([(float(x), float(y)) for x, y in path])
+    return internals, orphans
+
+
+def _polygons_to_parts(polygons, stem, path, group_identical,
+                       internals_by_idx=None) -> list[Part]:
+    internals_by_idx = internals_by_idx or {}
     if not polygons:
         return []
-    if not group_identical:
-        return [
-            Part(name=f"{stem}-P{idx + 1:02d}", geom=poly, source_file=path,
-                 allowed_rotations=None)
-            for idx, poly in enumerate(polygons)
-        ]
-
-    groups: dict[tuple, list] = {}
-    order: list[tuple] = []
-    for poly in polygons:
-        sig = _shape_signature(poly)
-        if sig not in groups:
-            groups[sig] = []
-            order.append(sig)
-        groups[sig].append(poly)
 
     parts: list[Part] = []
-    for idx, sig in enumerate(order):
-        polys = groups[sig]
-        parts.append(
-            Part(
-                name=f"{stem}-P{idx + 1:02d}",
-                geom=polys[0],
-                quantity=len(polys),
-                source_file=path,
-                allowed_rotations=None,
-            )
-        )
+    sig_to_part: dict[tuple, int] = {}
+    pn = 0
+    for idx, poly in enumerate(polygons):
+        ip = internals_by_idx.get(idx, [])
+        # Only group geometrically-identical parts that carry no internal cuts;
+        # parts with their own internal linework stay distinct so it is not lost.
+        if group_identical and not ip:
+            sig = _shape_signature(poly)
+            existing = sig_to_part.get(sig)
+            if existing is not None:
+                parts[existing].quantity += 1
+                continue
+        pn += 1
+        part = Part(name=f"{stem}-P{pn:02d}", geom=poly, source_file=path,
+                    allowed_rotations=None, internal_paths=ip)
+        if group_identical and not ip:
+            sig_to_part[sig] = len(parts)
+        parts.append(part)
     return parts
 
 

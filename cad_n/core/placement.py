@@ -15,7 +15,7 @@ from typing import Optional
 
 from shapely import STRtree
 from shapely.affinity import rotate, scale, translate
-from shapely.geometry import Polygon
+from shapely.geometry import LineString, Polygon
 
 from .models import NestingSettings, Part, Placement, Sheet
 
@@ -32,6 +32,9 @@ class Variant:
     w: float
     h: float
     area: float
+    # Internal cut lines (micro-joints / chase outlines) carried through the same
+    # mirror+rotate+anchor transform as ``base`` so they stay registered to it.
+    internal: list = field(default_factory=list)  # list[LineString]
 
 
 @dataclass
@@ -42,27 +45,30 @@ class PreparedPart:
     sort_key: float
 
 
-def _anchor_to_origin(poly: Polygon) -> Polygon:
-    minx, miny, _, _ = poly.bounds
-    return translate(poly, -minx, -miny)
-
-
 def prepare_part(part: Part, settings: NestingSettings) -> PreparedPart:
     clearance = settings.clearance_mm
     variants: list[Variant] = []
     mirrors = [False, True] if part.allow_mirror else [False]
     seen: set[tuple] = set()
+    base_internal = [LineString(p) for p in part.internal_paths if len(p) >= 2]
     for mirror in mirrors:
         for angle in settings.rotations_for(part):
             g = part.geom
+            ig = base_internal
             if mirror:
                 g = scale(g, xfact=-1.0, yfact=1.0, origin=(0, 0))
+                ig = [scale(l, xfact=-1.0, yfact=1.0, origin=(0, 0)) for l in ig]
             if angle:
                 g = rotate(g, angle, origin=(0, 0))
-            g = _anchor_to_origin(g)
-            minx, miny, maxx, maxy = g.bounds
+                ig = [rotate(l, angle, origin=(0, 0)) for l in ig]
+            # Anchor the boundary at the origin and shift the internal lines by the
+            # identical offset so they stay registered to it.
+            minx, miny, _, _ = g.bounds
+            g = translate(g, -minx, -miny)
+            ig = [translate(l, -minx, -miny) for l in ig]
+            gx0, gy0, gx1, gy1 = g.bounds
             # Skip rotations that produce a duplicate footprint+shape.
-            sig = (round(maxx, 4), round(maxy, 4), round(g.area, 4),
+            sig = (round(gx1, 4), round(gy1, 4), round(g.area, 4),
                    round(g.centroid.x, 3), round(g.centroid.y, 3))
             if sig in seen:
                 continue
@@ -73,7 +79,8 @@ def prepare_part(part: Part, settings: NestingSettings) -> PreparedPart:
                 else g
             )
             variants.append(
-                Variant(angle, mirror, g, infl, maxx - minx, maxy - miny, g.area)
+                Variant(angle, mirror, g, infl, gx1 - gx0, gy1 - gy0, g.area,
+                        internal=ig)
             )
     area = part.area
     return PreparedPart(part=part, variants=variants, area=area, sort_key=area)
@@ -201,10 +208,11 @@ def run_attempt(
     def _place(st: SheetState, s_i: int, pp: PreparedPart, best) -> None:
         y, x, v, pbase, pinfl = best
         st.add(pbase, pinfl)
+        internal_world = [translate(line, x, y) for line in v.internal]
         placements.append(Placement(
             part_id=pp.part.id, part_name=pp.part.name, sheet_index=s_i,
             x_mm=x, y_mm=y, rotation_deg=v.angle, mirrored=v.mirrored,
-            polygon_world=pbase))
+            polygon_world=pbase, internal_world=internal_world))
 
     for inst_idx in instance_order:
         pp = instances[inst_idx]

@@ -1,6 +1,7 @@
 """Exporter tests: clean output, holes preserved, round-trip reopen, and the
 validation gate that blocks bad geometry."""
 
+import dxfgen
 import ezdxf
 import pytest
 from shapely.geometry import box
@@ -77,6 +78,37 @@ def test_semantic_roundtrip_part_count(tmp_path):
     export_nesting(res, str(out), sheet, ExportOptions(include_labels=False))
     reimp = imp.import_dxf(str(out), imp.ImportOptions(cut_layers={"CUT"}, group_identical=False))
     assert len(reimp.parts) == res.total_parts_nested == 5
+
+
+def test_internal_cut_lines_exported_and_roundtrip(tmp_path):
+    """Preserved internal cut lines (micro-joints / chases) are emitted on CUT as
+    open polylines, ride through nesting, and survive a re-import."""
+    src = tmp_path / "mj.dxf"
+    dxfgen.internal_micro_joints().saveas(str(src))
+    parts = imp.import_dxf(str(src)).parts
+    assert len(parts) == 1 and len(parts[0].internal_paths) == 5
+
+    sheet = Sheet("S", 400, 300)
+    res = nest(parts, sheet, NestingSettings(attempt_count=1, part_spacing_mm=2))
+    assert res.total_parts_nested == 1
+    assert sum(len(pl.internal_world) for pl in res.placements) == 5
+
+    out = tmp_path / "mj_nest.dxf"
+    rep = export_nesting(res, str(out), sheet, ExportOptions(include_labels=False))
+    assert rep.success
+
+    doc = ezdxf.readfile(str(out))
+    cut = [e for e in doc.modelspace()
+           if e.dxf.layer == "CUT" and e.dxftype() == "LWPOLYLINE"]
+    # 1 closed outline + 5 open internal cut lines.
+    assert len(cut) == 6
+    assert sum(1 for e in cut if e.closed) == 1
+    assert sum(1 for e in cut if not e.closed) == 5
+
+    # Re-import keeps the part and all 5 internal cut lines.
+    reimp = imp.import_dxf(str(out), imp.ImportOptions(cut_layers={"CUT"}))
+    assert len(reimp.parts) == 1
+    assert len(reimp.parts[0].internal_paths) == 5
 
 
 def test_validation_blocks_overlap(tmp_path):

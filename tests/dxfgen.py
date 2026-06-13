@@ -103,6 +103,24 @@ def open_contour():
     return doc
 
 
+def internal_micro_joints():
+    """A closed part with internal cut linework that never closes: a tabbed inner
+    'chase' rectangle (drawn as 4 edges with ~6 mm corner gaps) plus a short
+    micro-joint sitting exactly on the part's own edge. Mirrors real CAM output
+    where micro-joints / chases are open segments inside a part. The outer part
+    must import as one solid (no hole), keeping all 5 open lines verbatim."""
+    doc = _new()
+    msp = doc.modelspace()
+    a = {"layer": "CUT"}
+    _rect(msp, 0, 0, 200, 120)                        # outer closed part
+    msp.add_line((60, 40), (134, 40), dxfattribs=a)   # chase bottom (corner gaps)
+    msp.add_line((140, 40), (140, 80), dxfattribs=a)  # chase right
+    msp.add_line((140, 86), (60, 86), dxfattribs=a)   # chase top
+    msp.add_line((60, 80), (60, 46), dxfattribs=a)    # chase left
+    msp.add_line((200, 55), (200, 65), dxfattribs=a)  # micro-joint on the edge
+    return doc
+
+
 # 8 -----------------------------------------------------------------------
 def duplicate_geometry():
     """One rectangle drawn twice (overlapping duplicate edges)."""

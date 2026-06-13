@@ -42,6 +42,10 @@ class CleanResult:
     open_chain_count: int = 0
     duplicate_segment_count: int = 0
     tiny_segment_count: int = 0
+    # Open segments that did not form any closed loop (boundary or hole). Kept so
+    # the importer can preserve internal cut lines (micro-joints, chase outlines)
+    # that sit inside a part. Each entry is an open polyline of (x, y) points.
+    internal_paths: list[list[Point]] = field(default_factory=list)
 
 
 # --------------------------------------------------------------------------- #
@@ -147,6 +151,43 @@ def _walk_simple_cycle(adj: dict[int, set[int]], nodes: set[int]) -> list[int] |
         if len(loop) > len(nodes) + 1:
             break
     return loop if len(loop) >= 3 else None
+
+
+def _walk_chains(points: list[Point], edges: list[tuple[int, int]]) -> list[list[Point]]:
+    """Decompose a set of undirected edges into open polylines, using each edge
+    once. Starts walks at degree-1 endpoints so dangling chains come out whole;
+    any leftover cycles are emitted closed. Used to recover open cut linework
+    (micro-joints, broken outlines) that never formed a retained loop."""
+    def ek(a: int, b: int) -> tuple[int, int]:
+        return (a, b) if a < b else (b, a)
+
+    nbr: dict[int, set[int]] = {}
+    for a, b in edges:
+        nbr.setdefault(a, set()).add(b)
+        nbr.setdefault(b, set()).add(a)
+    remaining: set[tuple[int, int]] = {ek(a, b) for a, b in edges}
+
+    chains: list[list[Point]] = []
+    while remaining:
+        start = None
+        for n in nbr:
+            if sum(1 for m in nbr[n] if ek(n, m) in remaining) == 1:
+                start = n
+                break
+        if start is None:                 # only cycles left; start anywhere
+            start = next(iter(remaining))[0]
+        seq = [start]
+        cur = start
+        while True:
+            nxt = next((m for m in nbr[cur] if ek(cur, m) in remaining), None)
+            if nxt is None:
+                break
+            remaining.discard(ek(cur, nxt))
+            seq.append(nxt)
+            cur = nxt
+        if len(seq) >= 2:
+            chains.append([points[i] for i in seq])
+    return chains
 
 
 def _signed_area(pts: list[Point]) -> float:
@@ -284,11 +325,14 @@ def validate_and_repair(poly: Polygon, tol: Tolerances) -> tuple[Polygon | None,
 # --------------------------------------------------------------------------- #
 def stitch_loops(
     segments: list[Segment], tol: Tolerances
-) -> tuple[list[list[Point]], int, int, int]:
+) -> tuple[list[list[Point]], int, int, int, list[list[Point]]]:
     """Stitch loose segments into closed loops.
 
-    Returns ``(loops, open_chain_count, duplicate_count, tiny_count)`` where each
-    loop is a list of (x, y) coordinates (not closed)."""
+    Returns ``(loops, open_chain_count, duplicate_count, tiny_count,
+    leftover_chains)`` where each loop is a list of (x, y) coordinates (not
+    closed) and ``leftover_chains`` are the open polylines made from edges that
+    never became part of a loop (preserved so callers can keep internal cut
+    linework such as micro-joints)."""
     weld = PointWeld(tol.snap_tolerance_mm)
     edge_set: set[tuple[int, int]] = set()
     tiny = 0
@@ -330,8 +374,20 @@ def stitch_loops(
         else:
             loops.extend(_dcel_faces(weld.points, adj, comp))
 
+    # Edges consumed by a retained loop; everything else is leftover open
+    # linework we hand back verbatim (kept within the snap tolerance).
+    used: set[tuple[int, int]] = set()
+    for loop in loops:
+        m = len(loop)
+        for i in range(m):
+            a, b = loop[i], loop[(i + 1) % m]
+            if a != b:
+                used.add((a, b) if a < b else (b, a))
+    leftover_edges = [e for e in edge_set if e not in used]
+    leftover_chains = _walk_chains(weld.points, leftover_edges)
+
     coord_loops = [[weld.points[i] for i in loop] for loop in loops]
-    return coord_loops, open_chains, dup, tiny
+    return coord_loops, open_chains, dup, tiny, leftover_chains
 
 
 # --------------------------------------------------------------------------- #
@@ -407,11 +463,12 @@ def build_polygons(
             continue
         candidate_rings.append(Polygon(poly.exterior.coords))
 
-    # 2) Stitch loose segments into loops.
-    loops, open_chains, dup, tiny = stitch_loops(open_segments, tol)
+    # 2) Stitch loose segments into loops; keep the leftover open linework.
+    loops, open_chains, dup, tiny, leftover = stitch_loops(open_segments, tol)
     result.open_chain_count = open_chains
     result.duplicate_segment_count = dup
     result.tiny_segment_count += tiny
+    result.internal_paths = leftover
     for loop in loops:
         coords = merge_collinear(loop, tol.collinear_angle_tolerance_deg)
         if len(coords) < 3:
@@ -440,15 +497,9 @@ def build_polygons(
                     code="TINY_SEGMENTS",
                 )
             )
-    if open_chains:
-        result.notices.append(
-            Notice(
-                f"{open_chains} open contour(s) detected. Open contours cannot be "
-                "nested. Check for gaps in the drawing.",
-                Severity.WARNING,
-                code="OPEN_CONTOUR",
-            )
-        )
+    # Open contours are no longer dropped here: leftover open linework is handed
+    # back on ``internal_paths`` and the importer decides whether each piece sits
+    # inside a part (kept as an internal cut) or is a true orphan (reported).
 
     # 3) Classify containment over ALL rings together.
     classified = classify_containment(candidate_rings)

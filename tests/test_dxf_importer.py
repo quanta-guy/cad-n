@@ -69,6 +69,19 @@ def test_open_contour_reported_and_skipped():
     assert "OPEN_CONTOUR" in _codes(res)
 
 
+def test_internal_open_cuts_preserved():
+    res = _import(dxfgen.internal_micro_joints())
+    assert len(res.parts) == 1
+    p = res.parts[0]
+    # Open inner linework must NOT become a hole -> full solid area is kept.
+    assert math.isclose(p.area, 200 * 120, rel_tol=1e-6)
+    assert len(p.holes) == 0
+    # All 5 open segments (4 tabbed chase edges + 1 edge micro-joint) are kept.
+    assert len(p.internal_paths) == 5
+    assert "INTERNAL_CUTS_KEPT" in _codes(res)
+    assert "OPEN_CONTOUR" not in _codes(res)
+
+
 def test_duplicate_geometry_deduped():
     res = _import(dxfgen.duplicate_geometry())
     assert len(res.parts) == 1

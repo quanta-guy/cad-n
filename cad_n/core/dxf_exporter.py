@@ -140,6 +140,19 @@ def _iter_lines(geom):
             yield from _iter_lines(g)
 
 
+def _emit_internal(msp, placement, ox: float) -> int:
+    """Emit a placement's preserved internal cut lines (micro-joints / chase
+    outlines) verbatim on the CUT layer. Returns the entity count added."""
+    n = 0
+    for line in getattr(placement, "internal_world", ()):
+        pts = [(float(x) + ox, float(y)) for x, y in getattr(line, "coords", [])]
+        if len(pts) >= 2:
+            msp.add_lwpolyline(pts, close=bool(getattr(line, "is_ring", False)),
+                               dxfattribs={"layer": LAYER_CUT})
+            n += 1
+    return n
+
+
 def _emit_common_line(msp, placements, ox: float, snap: float) -> tuple[int, int]:
     """Emit one sheet's cut linework with butting parts' shared edges merged.
 
@@ -189,6 +202,10 @@ def _emit_common_line(msp, placements, ox: float, snap: float) -> tuple[int, int
             msp.add_lwpolyline(pts, close=bool(ls.is_ring),
                                dxfattribs={"layer": LAYER_COMMON})
             common_n += 1
+
+    # Preserved internal cut lines ride along untouched by the perimeter merge.
+    for pl in placements:
+        cut_n += _emit_internal(msp, pl, ox)
     return cut_n, common_n
 
 
@@ -259,6 +276,7 @@ def export_nesting(
                     hole = [(x + ox, y) for x, y in _ring_points(interior)]
                     msp.add_lwpolyline(hole, close=True, dxfattribs={"layer": LAYER_CUT})
                     cut_entities += 1
+                cut_entities += _emit_internal(msp, pl, ox)
 
         if options.include_labels:
             for pl in sheet_pls:

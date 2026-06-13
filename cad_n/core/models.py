@@ -101,6 +101,13 @@ class Part:
     thickness: Optional[float] = None
     metadata: dict = field(default_factory=dict)
     notices: list[Notice] = field(default_factory=list)
+    # Open cut geometry that lies inside this part's outer boundary: micro-joints,
+    # chase outlines and other internal cut lines drawn as open (non-closing)
+    # segments. These never drive nesting (the outer boundary does) -- they are
+    # kept verbatim, transformed with the part, and re-emitted on the CUT layer at
+    # export. Each entry is one open polyline as a list of (x, y) points in the
+    # part's own coordinate frame (the same frame as ``geom``).
+    internal_paths: list[list[tuple[float, float]]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         # Normalise winding: exterior CCW, holes CW. Makes downstream area and
@@ -167,6 +174,9 @@ class Part:
             "material": self.material,
             "thickness": self.thickness,
             "metadata": self.metadata,
+            "internal_paths": [
+                [[float(x), float(y)] for x, y in path] for path in self.internal_paths
+            ],
         }
 
     @classmethod
@@ -182,6 +192,9 @@ class Part:
             material=d.get("material"),
             thickness=d.get("thickness"),
             metadata=d.get("metadata", {}),
+            internal_paths=[
+                [tuple(pt) for pt in path] for path in d.get("internal_paths", [])
+            ],
         )
         part.id = d.get("id", part.id)
         return part
@@ -352,6 +365,9 @@ class Placement:
     rotation_deg: float
     mirrored: bool
     polygon_world: Polygon    # final placed geometry in sheet coordinates
+    # Preserved internal cut lines (micro-joints / chase outlines) placed in the
+    # same sheet coordinates as ``polygon_world``. Each is a Shapely LineString.
+    internal_world: list = field(default_factory=list)
 
     @property
     def area(self) -> float:

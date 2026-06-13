@@ -2,6 +2,21 @@
 
 All notable changes to CAD-N are recorded here.
 
+## [Unreleased]
+
+### Added
+- **Internal cut preservation (micro-joints / chases)**: open cut linework that
+  lies inside a part's outer boundary — micro-joint tabs and "chase" outlines
+  drawn as gapped or open segments — is now kept verbatim instead of being
+  dropped as an open contour. Each piece is attached to the part that contains it
+  (`Part.internal_paths`), transformed with that part through nesting
+  (rotation / mirror / placement), drawn in the preview, and re-emitted on the
+  `CUT` layer at export (and re-imported faithfully). Micro-joint gaps are
+  preserved, never bridged, so the tabs that hold a part or its cut-out drop in
+  the skeleton survive. Closed internal contours are still treated as holes;
+  preserved internal lines raise an `INTERNAL_CUTS_KEPT` notice, and open
+  geometry not inside any part is still reported via `OPEN_CONTOUR`.
+
 ## [0.4.0] — 2026-06-11 — First public release
 
 CAD-N goes open source under the **MIT License** (formerly an internal tool).

@@ -95,6 +95,16 @@ class PreviewCanvas(QGraphicsView):
             item.setPen(QPen(QColor("#1c2833"), 0))
             item.setToolTip(f"{pl.part_name}  rot {pl.rotation_deg:g} deg")
             self._scene.addItem(item)
+            # Preserved internal cut lines (micro-joints / chase outlines), drawn
+            # on top of the fill so the operator can see them.
+            for line in getattr(pl, "internal_world", ()):
+                lpath = self._line_path(line)
+                if lpath is None:
+                    continue
+                litem = QGraphicsPathItem(lpath)
+                litem.setPen(QPen(QColor("#922b21"), 0))
+                litem.setBrush(QBrush(Qt.NoBrush))
+                self._scene.addItem(litem)
             c = pl.polygon_world.representative_point()
             label = self._scene.addText(pl.part_name, font)
             label.setDefaultTextColor(QColor("#1c2833"))
@@ -128,6 +138,17 @@ class PreviewCanvas(QGraphicsView):
         add_ring(poly.exterior.coords)
         for interior in poly.interiors:
             add_ring(interior.coords)
+        return path
+
+    @staticmethod
+    def _line_path(line):
+        coords = list(getattr(line, "coords", []))
+        if len(coords) < 2:
+            return None
+        path = QPainterPath()
+        path.moveTo(QPointF(coords[0][0], -coords[0][1]))
+        for x, y in coords[1:]:
+            path.lineTo(QPointF(x, -y))
         return path
 
     # -- interaction -------------------------------------------------------- #

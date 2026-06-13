@@ -51,7 +51,7 @@ def test_merge_collinear_keeps_real_corners():
 # Stitching loose segments
 # --------------------------------------------------------------------------- #
 def test_stitch_single_square():
-    loops, opens, dup, tiny = gc.stitch_loops(ring_segments(SQ), Tolerances())
+    loops, opens, dup, tiny, leftover = gc.stitch_loops(ring_segments(SQ), Tolerances())
     assert len(loops) == 1
     assert opens == 0
     assert len(loops[0]) == 4
@@ -60,7 +60,7 @@ def test_stitch_single_square():
 def test_stitch_detects_open_contour():
     # Three sides of a square -> open chain, no loop.
     segs = [((0, 0), (10, 0)), ((10, 0), (10, 10)), ((10, 10), (0, 10))]
-    loops, opens, dup, tiny = gc.stitch_loops(segs, Tolerances())
+    loops, opens, dup, tiny, leftover = gc.stitch_loops(segs, Tolerances())
     assert loops == []
     assert opens == 1
 
@@ -68,7 +68,7 @@ def test_stitch_detects_open_contour():
 def test_stitch_closed_loop_with_stray_tail():
     # A square plus a dangling tail edge sticking out of one corner.
     segs = ring_segments(SQ) + [((10, 10), (15, 15))]
-    loops, opens, dup, tiny = gc.stitch_loops(segs, Tolerances())
+    loops, opens, dup, tiny, leftover = gc.stitch_loops(segs, Tolerances())
     assert len(loops) == 1          # square recovered
     assert opens == 1               # tail reported as open
 
@@ -76,15 +76,34 @@ def test_stitch_closed_loop_with_stray_tail():
 def test_stitch_two_separate_squares():
     sq2 = [(100, 0), (110, 0), (110, 10), (100, 10)]
     segs = ring_segments(SQ) + ring_segments(sq2)
-    loops, opens, dup, tiny = gc.stitch_loops(segs, Tolerances())
+    loops, opens, dup, tiny, leftover = gc.stitch_loops(segs, Tolerances())
     assert len(loops) == 2
 
 
 def test_stitch_counts_duplicates():
     segs = ring_segments(SQ) + ring_segments(SQ)  # every edge twice
-    loops, opens, dup, tiny = gc.stitch_loops(segs, Tolerances())
+    loops, opens, dup, tiny, leftover = gc.stitch_loops(segs, Tolerances())
     assert len(loops) == 1
     assert dup == 4
+
+
+def test_stitch_returns_open_linework_as_leftover():
+    # Three sides of a square -> no loop; the open linework comes back whole.
+    segs = [((0, 0), (10, 0)), ((10, 0), (10, 10)), ((10, 10), (0, 10))]
+    loops, opens, dup, tiny, leftover = gc.stitch_loops(segs, Tolerances())
+    assert loops == []
+    assert len(leftover) == 1
+    for corner in [(0, 0), (10, 0), (10, 10), (0, 10)]:
+        assert corner in leftover[0]
+
+
+def test_stitch_keeps_only_the_dangling_tail_as_leftover():
+    # A closed square plus a dangling tail: the square loops, the tail is leftover.
+    segs = ring_segments(SQ) + [((10, 10), (15, 15))]
+    loops, opens, dup, tiny, leftover = gc.stitch_loops(segs, Tolerances())
+    assert len(loops) == 1
+    assert len(leftover) == 1
+    assert (15, 15) in leftover[0]
 
 
 # --------------------------------------------------------------------------- #
