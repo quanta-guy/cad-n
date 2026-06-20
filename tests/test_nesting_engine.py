@@ -180,6 +180,24 @@ def test_multi_sheet_configurations_ranked_best_first():
     assert cfgs[0].stock_area == min(c.stock_area for c in placed)
 
 
+def test_multi_stock_never_drops_placeable_part_under_truncation():
+    # Regression: multi-stock search must not drop a part it could place. BIG
+    # fits only the large stock B; a zero time limit truncates the config search
+    # after the first (cheapest, B-less) candidate, which cannot hold BIG. The
+    # feasibility fallback must still open a B sheet rather than fail the part.
+    A = Sheet("A", 100, 100, margin_mm=0)
+    B = Sheet("B", 200, 100, margin_mm=0)
+    big = make_rectangle_part("BIG", 150, 50, quantity=1, allow_rotation=False)
+    small = make_rectangle_part("S", 30, 30, quantity=1, allow_rotation=False)
+    settings = NestingSettings(part_spacing_mm=0, attempt_count=1,
+                               rotation_step_deg=0, time_limit_sec=0.0)
+    res = nest([big, small], [A, B], settings)
+    assert res.total_parts_failed == 0
+    assert res.total_parts_nested == 2
+    assert any(s.name == "B" for s in res.sheets)   # BIG really landed on a B sheet
+    _assert_valid_multi(res, settings)
+
+
 def test_single_element_list_matches_single_sheet():
     sheet = Sheet("S", 300, 200)
     settings = NestingSettings(attempt_count=1, part_spacing_mm=2)

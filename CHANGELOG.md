@@ -4,6 +4,19 @@ All notable changes to CAD-N are recorded here.
 
 ## [Unreleased]
 
+### Fixed
+- **Multi-stock nesting could drop placeable parts instead of opening another
+  sheet.** With two stock sizes the engine searches stock-mix configurations
+  ranked by least area; that search is anchored to net part area (which
+  underestimates how many sheets actually pack) and is bounded by the time
+  limit, so it could settle on a mix with too few of the size a large part needs
+  and report that part as "no room" — even with stock available. The engine now
+  falls back to a guaranteed-sufficient bin list (cheapest sheets first) whenever
+  the best mix so far still has room-limited failures, so every part that fits
+  *some* stock size is placed. Example: the two 1340×2323 chassis in a real job
+  each fit only the 2500 sheet; the old search left one unplaced, the engine now
+  nests all parts on 2× 2500 + 3× 2000.
+
 ### Added
 - **Endpoint snap tolerance on the Import dialog**: the snap tolerance — the
   knob that decides whether nearly-touching line ends weld so an outline closes —

@@ -285,6 +285,29 @@ def _rank_key(opt: ConfigOption) -> tuple:
     return (0 if opt.all_placed else 1, opt.stock_area, opt.sheets_used, opt.waste_area)
 
 
+def _feasible_fallback_bins(types: list[Sheet], total_instances: int) -> list[Sheet]:
+    """A bin list guaranteed to hold every *placeable* instance: as many of each
+    stock type as availability allows (bounded by the instance count), cheapest
+    (smallest) sheets first so the realised mix favours cheaper stock. Packed
+    with ``open_until_fit`` this opens only the sheets it needs."""
+    bins: list[Sheet] = []
+    for t in types:
+        n = max(0, min(int(t.quantity_available), total_instances))
+        bins.extend([t] * n)
+    bins.sort(key=lambda s: s.width_mm * s.height_mm)  # smallest/cheapest first
+    return bins
+
+
+def _has_placeable_failures(opt: ConfigOption, pp_by_id, types: list[Sheet]) -> bool:
+    """True if this option left unplaced a part that *does* fit some stock type —
+    i.e. it was dropped for lack of room, not because it is genuinely too large."""
+    for up in opt.result.unnested_parts:
+        pp = pp_by_id.get(up.part_id)
+        if pp is not None and _fits_any(pp, types):
+            return True
+    return False
+
+
 def _multi(prepared, types, settings, t0, progress, pp_by_id, real_parts,
            part_area, total_instances) -> NestingResult:
     candidates = _enumerate_configs(types, part_area, total_instances)
@@ -303,6 +326,20 @@ def _multi(prepared, types, settings, t0, progress, pp_by_id, real_parts,
         if time.perf_counter() - t0 >= settings.time_limit_sec:
             hit_limit = True
             break
+
+    # Correctness guarantee: the area-based candidates can under-provision
+    # sheets (net part area underestimates how many sheets really pack), and the
+    # time limit can truncate the search before a feasible mix is tried — either
+    # way a placeable part could be dropped. If the best mix so far still leaves
+    # room-limited failures, pack into a guaranteed-sufficient bin list so we
+    # open another sheet instead of dropping parts while stock remains.
+    best_so_far = min(options, key=_rank_key) if options else None
+    if best_so_far is None or _has_placeable_failures(best_so_far, pp_by_id, types):
+        fb_bins = _feasible_fallback_bins(types, total_instances)
+        if fb_bins:
+            fb, hl = _search(prepared, fb_bins, settings, t0, open_until_fit=True)
+            hit_limit = hit_limit or hl
+            options.append(_make_option(fb, types, settings, pp_by_id, real_parts))
 
     # Different candidates can realise the same usage (a bin may go unused);
     # dedupe by realised mix, keep the best, then rank best-first.
