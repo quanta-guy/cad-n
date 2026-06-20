@@ -421,8 +421,10 @@ def extract(doc, path: str, options: ImportOptions, summary: Optional[DxfSummary
     if orphan_open:
         result.notices.append(
             Notice(
-                f"{orphan_open} open contour(s) not inside any part were skipped. Open "
-                "geometry is only kept when it lies inside a closed part boundary.",
+                f"{orphan_open} open contour(s) not inside any part were skipped. "
+                "These are outlines that did not close into a part. If parts are "
+                "missing, increase the endpoint snap tolerance (Import dialog or "
+                "Advanced tolerances) to weld small gaps, then re-import.",
                 Severity.WARNING,
                 code="OPEN_CONTOUR",
             )

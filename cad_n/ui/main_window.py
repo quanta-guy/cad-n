@@ -10,6 +10,7 @@ so they can be driven by a headless smoke test without real dialogs.
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction
@@ -358,10 +359,15 @@ class MainWindow(QMainWindow):
             summary = imp.summarize(doc, path)
             cut_layers = None
             if ask_layers:
-                dlg = ImportDialog(summary, self)
+                dlg = ImportDialog(summary, self.tolerances.snap_tolerance_mm, self)
                 if dlg.exec() != QDialog.Accepted:
                     continue
                 cut_layers = dlg.selected_layers()
+                # Remember the operator's snap choice so it carries to the next
+                # import and stays in sync with the Advanced tolerances dialog.
+                snap = dlg.snap_tolerance()
+                if snap != self.tolerances.snap_tolerance_mm:
+                    self.tolerances = replace(self.tolerances, snap_tolerance_mm=snap)
             options = imp.ImportOptions(cut_layers=cut_layers, tolerances=self.tolerances)
             res = imp.extract(doc, path, options, summary)
             self.parts.extend(res.parts)

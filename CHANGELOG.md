@@ -5,6 +5,15 @@ All notable changes to CAD-N are recorded here.
 ## [Unreleased]
 
 ### Added
+- **Endpoint snap tolerance on the Import dialog**: the snap tolerance — the
+  knob that decides whether nearly-touching line ends weld so an outline closes —
+  is now adjustable directly in the Import dialog, not only in *Advanced
+  tolerances*. A too-tight value silently drops parts whose outlines have small
+  drafting gaps (e.g. a perforated chassis whose tab-notch detail sits ~0.25 mm
+  off the main outline never closes and is skipped). The chosen value persists to
+  the next import and stays in sync with the Advanced dialog. The `OPEN_CONTOUR`
+  warning now tells the operator to raise the snap tolerance and re-import when
+  parts are missing.
 - **Best-nests log**: after each successful nest, the result is offered to a
   persistent log that keeps only the **highest-utilization** nests (a "best
   nests" leaderboard, de-duplicated and capped). Open it from **File → Best
