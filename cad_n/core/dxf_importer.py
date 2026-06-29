@@ -100,6 +100,7 @@ class ImportOptions:
     cut_layers: Optional[set[str]] = None   # None -> use summary suggestion
     explode_blocks: bool = True
     group_identical: bool = True
+    ignore_enclosing_frame: bool = True
     tolerances: Tolerances = field(default_factory=lambda: DEFAULT_TOLERANCES)
 
 
@@ -383,7 +384,10 @@ def extract(doc, path: str, options: ImportOptions, summary: Optional[DxfSummary
         )
 
     # Reconstruct parts from geometry.
-    clean = gc.build_polygons(closed_rings, open_segments, tol)
+    clean = gc.build_polygons(
+        closed_rings, open_segments, tol,
+        ignore_enclosing_frame=options.ignore_enclosing_frame,
+    )
     result.notices.extend(clean.notices)
 
     if not clean.polygons:
@@ -456,6 +460,16 @@ def _shape_signature(poly, q: float = 0.1) -> tuple:
     return (len(ext), len(poly.interiors), r(poly.area), r(poly.length), edges)
 
 
+def _preview_instance(poly) -> dict:
+    return {
+        "outer": [[float(x), float(y)] for x, y in list(poly.exterior.coords)[:-1]],
+        "holes": [
+            [[float(x), float(y)] for x, y in list(ring.coords)[:-1]]
+            for ring in poly.interiors
+        ],
+    }
+
+
 def _assign_internal_paths(polygons, paths, snap_tol: float = 0.05):
     """Attach each leftover open path to the smallest-area part whose outer
     boundary encloses it. A path is "inside" a part if the part's filled
@@ -510,6 +524,7 @@ def _polygons_to_parts(polygons, stem, path, group_identical,
     pn = 0
     for idx, poly in enumerate(polygons):
         ip = internals_by_idx.get(idx, [])
+        preview = _preview_instance(poly)
         # Only group geometrically-identical parts that carry no internal cuts;
         # parts with their own internal linework stay distinct so it is not lost.
         if group_identical and not ip:
@@ -517,10 +532,15 @@ def _polygons_to_parts(polygons, stem, path, group_identical,
             existing = sig_to_part.get(sig)
             if existing is not None:
                 parts[existing].quantity += 1
+                parts[existing].metadata.setdefault(
+                    "preview_instances", [_preview_instance(parts[existing].geom)]
+                )
+                parts[existing].metadata["preview_instances"].append(preview)
                 continue
         pn += 1
+        metadata = {"preview_instances": [preview]} if group_identical and not ip else {}
         part = Part(name=f"{stem}-P{pn:02d}", geom=poly, source_file=path,
-                    allowed_rotations=None, internal_paths=ip)
+                    allowed_rotations=None, internal_paths=ip, metadata=metadata)
         if group_identical and not ip:
             sig_to_part[sig] = len(parts)
         parts.append(part)

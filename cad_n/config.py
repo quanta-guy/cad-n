@@ -22,7 +22,7 @@ class Tolerances:
     Defaults match doc section 7.2 / the agent prompt.
     """
 
-    snap_tolerance_mm: float = 0.05
+    snap_tolerance_mm: float = 0.3
     curve_chord_tolerance_mm: float = 0.1
     min_segment_length_mm: float = 0.05
     overlap_tolerance_mm: float = 0.01

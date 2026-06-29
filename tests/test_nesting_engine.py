@@ -45,6 +45,7 @@ def test_two_rectangles_one_sheet():
     res = nest(parts, sheet, settings)
     assert res.total_parts_nested == 2
     assert res.sheet_count_used == 1
+    assert any(n.code == "OPTIMIZATION_BOUND" for n in res.notices)
     _assert_valid(res, sheet, settings)
 
 
@@ -163,6 +164,7 @@ def test_multi_sheet_mix_beats_single_stock():
     multi_stock = sum(s.width_mm * s.height_mm for s in multi.sheets)
     assert multi_stock < single_stock            # the mix wastes less stock
     assert len(multi.configurations) > 1          # alternatives to choose from
+    assert any(n.code == "OPTIMIZATION_BOUND" for n in multi.notices)
     _assert_valid_multi(multi, settings)
 
 
@@ -178,6 +180,18 @@ def test_multi_sheet_configurations_ranked_best_first():
     # Every fully-placed config is at least as costly (stock area) as the best.
     placed = [c for c in cfgs if c.all_placed]
     assert cfgs[0].stock_area == min(c.stock_area for c in placed)
+
+
+def test_underused_large_sheet_shrinks_to_smaller_stock():
+    A = Sheet("A", 2500, 1500, margin_mm=0)
+    B = Sheet("B", 2000, 1500, margin_mm=0)
+    parts = [make_rectangle_part("P", 930, 570, quantity=1, allow_rotation=False)]
+    res = nest(parts, [A, B],
+               NestingSettings(part_spacing_mm=0, attempt_count=1, rotation_step_deg=0))
+    assert res.total_parts_failed == 0
+    assert res.sheet_count_used == 1
+    assert res.sheets[0].name == "B"
+    assert res.configurations[0].counts == [("B", 1)]
 
 
 def test_multi_stock_never_drops_placeable_part_under_truncation():

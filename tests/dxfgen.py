@@ -103,6 +103,19 @@ def open_contour():
     return doc
 
 
+def small_gap_rectangle(gap=0.25):
+    """A rectangle whose final endpoint is just shy of closing. The default
+    import snap tolerance should weld this common drafting gap."""
+    doc = _new()
+    msp = doc.modelspace()
+    a = {"layer": "CUT"}
+    msp.add_line((0, 0), (100, 0), dxfattribs=a)
+    msp.add_line((100, 0), (100, 60), dxfattribs=a)
+    msp.add_line((100, 60), (0, 60), dxfattribs=a)
+    msp.add_line((0, 60), (0, gap), dxfattribs=a)
+    return doc
+
+
 def internal_micro_joints():
     """A closed part with internal cut linework that never closes: a tabbed inner
     'chase' rectangle (drawn as 4 edges with ~6 mm corner gaps) plus a short
@@ -224,6 +237,22 @@ def common_cut_rectangles():
     return doc
 
 
+def sheet_frame_with_nested_parts():
+    """A sheet-layout DXF: a large stock/frame rectangle on the cut layer with
+    several real part profiles inside it. The importer should ignore the outer
+    frame and keep the nested profiles as parts, not as holes in one giant part.
+    """
+    doc = _new()
+    msp = doc.modelspace()
+    _rect(msp, 0, 0, 1000, 700)
+    for x, y in ((100, 100), (300, 100)):
+        _rect(msp, x, y, 120, 80)
+        msp.add_circle((x + 30, y + 30), radius=8, dxfattribs={"layer": "CUT"})
+    for i in range(6):
+        _rect(msp, 100 + i * 90, 350, 50, 30)
+    return doc
+
+
 ALL_BUILDERS = {
     "01_simple_rectangle": simple_rectangle,
     "02_rectangle_with_hole": rectangle_with_hole,
@@ -232,6 +261,7 @@ ALL_BUILDERS = {
     "05_spline_profile": spline_profile,
     "06_multiple_parts": multiple_parts,
     "07_open_contour": open_contour,
+    "07b_small_gap_rectangle": small_gap_rectangle,
     "08_duplicate_geometry": duplicate_geometry,
     "09_dimensions_and_text": dimensions_and_text,
     "10_blocks_insert": blocks_insert,
@@ -240,4 +270,5 @@ ALL_BUILDERS = {
     "13_large_file": large_file,
     "14_part_too_large": part_too_large,
     "15_common_cut_rectangles": common_cut_rectangles,
+    "16_sheet_frame_with_nested_parts": sheet_frame_with_nested_parts,
 }

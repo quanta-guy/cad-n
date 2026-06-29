@@ -145,9 +145,9 @@ class MainWindow(QMainWindow):
         sheet_box = QGroupBox("Sheet A (stock)")
         sf = QFormLayout(sheet_box)
         self.sp_sheet_w = self._dspin(2500, 1, 100000)
-        self.sp_sheet_h = self._dspin(1250, 1, 100000)
+        self.sp_sheet_h = self._dspin(1500, 1, 100000)
         self.sp_sheet_qty = QSpinBox(); self.sp_sheet_qty.setRange(1, 100000); self.sp_sheet_qty.setValue(100)
-        self.sp_margin = self._dspin(10, 0, 10000)
+        self.sp_margin = self._dspin(0, 0, 10000)
         sf.addRow("Length (mm)", self.sp_sheet_w)
         sf.addRow("Width (mm)", self.sp_sheet_h)
         sf.addRow("Sheets available", self.sp_sheet_qty)
@@ -165,14 +165,15 @@ class MainWindow(QMainWindow):
         lv.addWidget(self.chk_sheet2)
         self.sheet2_box = QGroupBox("Sheet B (stock)")
         s2 = QFormLayout(self.sheet2_box)
-        self.sp_sheet2_w = self._dspin(1250, 1, 100000)
-        self.sp_sheet2_h = self._dspin(1250, 1, 100000)
+        self.sp_sheet2_w = self._dspin(2000, 1, 100000)
+        self.sp_sheet2_h = self._dspin(1500, 1, 100000)
         self.sp_sheet2_qty = QSpinBox(); self.sp_sheet2_qty.setRange(1, 100000); self.sp_sheet2_qty.setValue(100)
         s2.addRow("Length (mm)", self.sp_sheet2_w)
         s2.addRow("Width (mm)", self.sp_sheet2_h)
         s2.addRow("Sheets available", self.sp_sheet2_qty)
         self.sheet2_box.setVisible(False)
         lv.addWidget(self.sheet2_box)
+        self.chk_sheet2.setChecked(True)
 
         nest_box = QGroupBox("Nesting")
         nf = QFormLayout(nest_box)
@@ -221,9 +222,10 @@ class MainWindow(QMainWindow):
         self.btn_prev = QPushButton("< Prev sheet"); self.btn_prev.clicked.connect(self.prev_sheet)
         self.btn_next = QPushButton("Next sheet >"); self.btn_next.clicked.connect(self.next_sheet)
         self.lbl_sheet = QLabel("Sheet -/-"); self.lbl_sheet.setAlignment(Qt.AlignCenter)
-        btn_fit = QPushButton("Fit"); btn_fit.clicked.connect(self.canvas.fit_view)
+        btn_fit = QPushButton("Fit parts"); btn_fit.clicked.connect(self.canvas.fit_view)
+        btn_fit_sheet = QPushButton("Fit sheet"); btn_fit_sheet.clicked.connect(self.canvas.fit_sheet_view)
         nav.addWidget(self.btn_prev); nav.addWidget(self.lbl_sheet)
-        nav.addWidget(self.btn_next); nav.addWidget(btn_fit)
+        nav.addWidget(self.btn_next); nav.addWidget(btn_fit); nav.addWidget(btn_fit_sheet)
         self.progress = QProgressBar(); self.progress.setVisible(False)
         cv.addWidget(self.cfg_widget); cv.addWidget(self.canvas, 1)
         cv.addLayout(nav); cv.addWidget(self.progress)
@@ -375,6 +377,8 @@ class MainWindow(QMainWindow):
                 self.source_files.append(path)
             added += len(res.parts)
             self._append_warnings(res.notices)
+        if added:
+            self._reset_layout_after_part_change()
         self._refresh_part_table()
         self.statusBar().showMessage(f"Imported {added} part(s).")
 
@@ -386,6 +390,7 @@ class MainWindow(QMainWindow):
 
     def add_rectangle(self, name, length, width, qty, allow_rotation=True) -> None:
         self.parts.append(make_rectangle_part(name, length, width, qty, allow_rotation))
+        self._reset_layout_after_part_change()
         self._refresh_part_table()
 
     # -------------------------------------------------------------- nesting #
@@ -594,6 +599,7 @@ class MainWindow(QMainWindow):
         self.sp_attempts.setValue(job.settings.attempt_count)
         self.sp_timelimit.setValue(job.settings.time_limit_sec)
         self.job_path = path
+        self._reset_layout_after_part_change()
         self._refresh_part_table()
         self._append_warnings(job.notices, clear=True)
         self.statusBar().showMessage(f"Loaded job: {job.job_name} ({len(self.parts)} parts)")
@@ -669,15 +675,12 @@ class MainWindow(QMainWindow):
         for r in rows:
             if 0 <= r < len(self.parts):
                 del self.parts[r]
+        self._reset_layout_after_part_change()
         self._refresh_part_table()
 
     def clear_parts(self) -> None:
         self.parts = []
-        self.result = None
-        self._active_result = None
-        self.cfg_widget.setVisible(False)
-        self.btn_export.setEnabled(False); self.btn_csv.setEnabled(False)
-        self.canvas.show_placeholder("Import parts and run a nest to see the layout.")
+        self._reset_layout_after_part_change()
         self._refresh_part_table(); self._update_summary()
 
     def _refresh_part_table(self) -> None:
@@ -723,12 +726,45 @@ class MainWindow(QMainWindow):
         self.table.blockSignals(True)
         self.table.item(row, 2).setText(str(q))
         self.table.blockSignals(False)
+        self._reset_layout_after_part_change()
+        self._refresh_part_table()
 
     # -------------------------------------------------------------- summary #
+    def _reset_layout_after_part_change(self) -> None:
+        """Clear stale nest outputs and show the current parts for verification."""
+        self.result = None
+        self._active_result = None
+        self._pending_sheet = None
+        self._pending_sheets = []
+        self._pending_parts = []
+        self._pending_settings = None
+        self._suppress_config = True
+        self.cb_config.clear()
+        self._suppress_config = False
+        self.cfg_widget.setVisible(False)
+        self.btn_export.setEnabled(False)
+        self.btn_csv.setEnabled(False)
+        if self.parts:
+            self.canvas.set_import_preview(self.parts)
+            self.lbl_sheet.setText(f"Import preview - {len(self.parts)} profile(s)")
+        else:
+            self.canvas.show_placeholder("Import parts to preview profiles, then run a nest.")
+            self.lbl_sheet.setText("Sheet -/-")
+        self._update_summary()
+
     def _update_summary(self) -> None:
         r = self._active_result or self.result
         if not r:
-            self.lbl_summary.setText("No nest yet. Set up parts and sheet, then Run Nest.")
+            if self.parts:
+                qty = sum(max(0, int(p.quantity)) for p in self.parts)
+                area = sum(p.area * max(0, int(p.quantity)) for p in self.parts)
+                self.lbl_summary.setText(
+                    f"<b>Import preview:</b> {len(self.parts)} profile(s) &nbsp; "
+                    f"<b>Requested qty:</b> {qty} &nbsp; "
+                    f"<b>Total part area:</b> {area:.0f} mm^2 &nbsp; "
+                    "Run Nest to place them on stock.")
+            else:
+                self.lbl_summary.setText("No parts yet. Import or add parts, then Run Nest.")
             return
         utils = " | ".join(f"S{i+1}:{u*100:.0f}%" for i, u in enumerate(r.utilization_by_sheet))
         remnants = ", ".join(f"{x:.0f}" for x in r.remnant_length_by_sheet)

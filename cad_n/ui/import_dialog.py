@@ -82,7 +82,7 @@ class ImportDialog(QDialog):
         self.sp_snap.setValue(snap_tolerance_mm)
         self.sp_snap.setToolTip(
             "Maximum gap between two line endpoints for them to be treated as the "
-            "same point. Default 0.05 mm. Larger values close gappier outlines."
+            "same point. Default 0.3 mm. Larger values close gappier outlines."
         )
         form.addRow("Endpoint snap tolerance (mm)", self.sp_snap)
         layout.addLayout(form)

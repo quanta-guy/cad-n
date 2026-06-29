@@ -46,6 +46,7 @@ class CleanResult:
     # the importer can preserve internal cut lines (micro-joints, chase outlines)
     # that sit inside a part. Each entry is an open polyline of (x, y) points.
     internal_paths: list[list[Point]] = field(default_factory=list)
+    ignored_frame_count: int = 0
 
 
 # --------------------------------------------------------------------------- #
@@ -435,6 +436,86 @@ def classify_containment(rings: list[Polygon]) -> list[Polygon]:
     return polygons
 
 
+def _is_axis_aligned_rectangle(poly: Polygon, tol: Tolerances) -> bool:
+    """True for a simple axis-aligned rectangular frame/border ring."""
+    coords = list(poly.exterior.coords)[:-1]
+    coords = merge_collinear(coords, tol.collinear_angle_tolerance_deg)
+    if len(coords) != 4:
+        return False
+    minx, miny, maxx, maxy = poly.bounds
+    bbox_area = (maxx - minx) * (maxy - miny)
+    if bbox_area <= 0:
+        return False
+    if abs(poly.area - bbox_area) > max(bbox_area * 1e-4, tol.overlap_tolerance_mm):
+        return False
+    eps = max(tol.snap_tolerance_mm, tol.overlap_tolerance_mm, 1e-6)
+    for x, y in coords:
+        if not (
+            (abs(x - minx) <= eps or abs(x - maxx) <= eps)
+            and (abs(y - miny) <= eps or abs(y - maxy) <= eps)
+        ):
+            return False
+    return True
+
+
+def _parent_map(rings: list[Polygon]) -> dict[int, int | None]:
+    """Immediate containing ring for each ring, smallest container wins."""
+    reps = {i: p.representative_point() for i, p in enumerate(rings)}
+    parent: dict[int, int | None] = {}
+    for i, p in enumerate(rings):
+        parent[i] = None
+        best_area = float("inf")
+        for j, q in enumerate(rings):
+            if i == j or q.area <= p.area:
+                continue
+            if q.area < best_area and q.contains(reps[i]):
+                parent[i] = j
+                best_area = q.area
+    return parent
+
+
+def _drop_enclosing_frames(rings: list[Polygon], tol: Tolerances) -> tuple[list[Polygon], int]:
+    """Remove sheet/border frames drawn around many nested part profiles.
+
+    Some shop-floor DXFs export an existing sheet layout with the stock border
+    on the same layer as cut geometry. If we keep that border, containment
+    classification turns the whole sheet into one giant part and treats the real
+    profiles as holes. To avoid dropping a legitimate single part with holes, we
+    only remove a rectangular container when it has many direct children and
+    several of those children themselves contain geometry (typical of multiple
+    independent parts with their own holes/details).
+    """
+    if len(rings) < 8:
+        return rings, 0
+    parent = _parent_map(rings)
+    children_by_parent: dict[int, list[int]] = {}
+    for child, par in parent.items():
+        if par is not None:
+            children_by_parent.setdefault(par, []).append(child)
+
+    drop: set[int] = set()
+    for idx, poly in enumerate(rings):
+        if not _is_axis_aligned_rectangle(poly, tol):
+            continue
+        children = children_by_parent.get(idx, [])
+        if len(children) < 8:
+            continue
+        substantial = [
+            child for child in children
+            if rings[child].area >= max(tol.min_part_area_mm2 * 50.0, poly.area * 1e-6)
+        ]
+        if len(substantial) < 4:
+            continue
+        nested_child_count = sum(1 for child in children if children_by_parent.get(child))
+        if nested_child_count < 2:
+            continue
+        drop.add(idx)
+
+    if not drop:
+        return rings, 0
+    return [p for i, p in enumerate(rings) if i not in drop], len(drop)
+
+
 # --------------------------------------------------------------------------- #
 # Top-level entry point
 # --------------------------------------------------------------------------- #
@@ -442,6 +523,7 @@ def build_polygons(
     closed_rings: list[list[Point]],
     open_segments: list[Segment],
     tol: Tolerances | None = None,
+    ignore_enclosing_frame: bool = False,
 ) -> CleanResult:
     """Turn raw imported geometry into clean, valid polygons with holes."""
     tol = tol or DEFAULT_TOLERANCES
@@ -479,6 +561,19 @@ def build_polygons(
             continue
         if not poly.is_empty:
             candidate_rings.append(Polygon(poly.exterior.coords))
+
+    if ignore_enclosing_frame:
+        candidate_rings, ignored = _drop_enclosing_frames(candidate_rings, tol)
+        result.ignored_frame_count = ignored
+        if ignored:
+            result.notices.append(
+                Notice(
+                    f"Ignored {ignored} large enclosing sheet/frame rectangle(s) "
+                    "around the imported profiles.",
+                    Severity.INFO,
+                    code="OUTER_FRAME_IGNORED",
+                )
+            )
 
     if dup:
         result.notices.append(

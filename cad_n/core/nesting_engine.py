@@ -18,6 +18,8 @@ import random
 import time
 from typing import Callable, Optional
 
+from shapely.affinity import translate
+
 from .models import (
     ConfigOption,
     NestingResult,
@@ -90,6 +92,51 @@ def _stock_area(attempt: AttemptResult) -> float:
     return sum(s.width_mm * s.height_mm for s in attempt.sheets)
 
 
+def _usable_area_lower_bound(prepared: list[PreparedPart], sheets: list[Sheet]) -> int:
+    """Fewest sheets possible by area alone, using the largest usable stock."""
+    max_usable = max((s.usable_area for s in sheets), default=0.0)
+    if max_usable <= 0:
+        return 0
+    part_area = sum(pp.area * pp.part.quantity for pp in prepared)
+    return max(1, math.ceil(part_area / max_usable - 1e-9))
+
+
+def _full_area_for_counts(counts: tuple, types: list[Sheet]) -> float:
+    return sum(n * t.width_mm * t.height_mm for n, t in zip(counts, types))
+
+
+def _compatible_type_indexes(pp: PreparedPart, types: list[Sheet]) -> list[int]:
+    out = []
+    eps = 1e-6
+    for i, sheet in enumerate(types):
+        uw, uh = sheet.usable_width, sheet.usable_height
+        if any(v.w <= uw + eps and v.h <= uh + eps for v in pp.variants):
+            out.append(i)
+    return out
+
+
+def _config_can_cover_required_stock(counts: tuple, types: list[Sheet],
+                                     prepared: list[PreparedPart]) -> bool:
+    """Fast infeasibility filter before running geometric placement.
+
+    If a part fits only one stock type, the candidate must provide enough usable
+    area of that type for those exclusive parts. This is only a lower bound, but
+    it cheaply skips many mixed configurations that cannot possibly place all
+    large stock-specific profiles.
+    """
+    exclusive_area = [0.0] * len(types)
+    for pp in prepared:
+        compatible = _compatible_type_indexes(pp, types)
+        if not compatible:
+            return False
+        if len(compatible) == 1:
+            exclusive_area[compatible[0]] += pp.area * pp.part.quantity
+    for i, area in enumerate(exclusive_area):
+        if area > counts[i] * types[i].usable_area + 1e-6:
+            return False
+    return True
+
+
 def _score(attempt: AttemptResult) -> tuple:
     by_sheet: dict[int, float] = {}
     for pl in attempt.placements:
@@ -102,18 +149,26 @@ def _score(attempt: AttemptResult) -> tuple:
 
 def _search(prepared: list[PreparedPart], bins: list[Sheet],
             settings: NestingSettings, t0: float,
-            open_until_fit: bool = False) -> tuple[AttemptResult, bool]:
+            open_until_fit: bool = False,
+            target_sheet_count: int | None = None) -> tuple[AttemptResult, bool]:
     """Best AttemptResult over several part orderings packed into ``bins``.
 
     Returns ``(best, hit_time_limit)``."""
     best: Optional[AttemptResult] = None
     best_key: Optional[tuple] = None
     hit_limit = False
+    total_instances = sum(pp.part.quantity for pp in prepared)
     for order in _build_orderings(prepared, settings):
         attempt = run_attempt(order, [], bins, settings, open_until_fit=open_until_fit)
         key = _score(attempt)
         if best_key is None or key < best_key:
             best, best_key = attempt, key
+        if (
+            target_sheet_count is not None
+            and len(attempt.placements) == total_instances
+            and attempt.sheets_used <= target_sheet_count
+        ):
+            break
         if time.perf_counter() - t0 >= settings.time_limit_sec:
             hit_limit = True
             break
@@ -158,8 +213,12 @@ def nest(
         sheet0 = valid_types[0]
         max_sheets = max(1, min(int(sheet0.quantity_available), total_instances))
         bins = [sheet0] * max_sheets
-        best, hit_limit = _search(prepared, bins, settings, t0)
+        best, hit_limit = _search(
+            prepared, bins, settings, t0,
+            target_sheet_count=_usable_area_lower_bound(prepared, valid_types),
+        )
         _assemble(result, best, valid_types, settings, pp_by_id, real_parts)
+        _add_optimization_notice(result, prepared, valid_types)
         if hit_limit:
             result.notices.append(Notice(
                 f"Stopped after the {settings.time_limit_sec:g}s time limit.",
@@ -237,6 +296,36 @@ def _bins_for(counts: tuple, types: list[Sheet]) -> list[Sheet]:
     return bins
 
 
+def _priority_configs(types: list[Sheet], part_area: float,
+                      instances: int) -> list[tuple]:
+    """Promising incumbent configs tried before the full area frontier.
+
+    In mixed-stock jobs, the cheapest area-frontier candidates can be infeasible
+    because large parts need a large stock type. Trying a few near-lower-bound
+    single-stock configs first gives the search a good all-placed incumbent
+    early, while the normal candidate pass still gets to beat it with a cheaper
+    mix if one exists.
+    """
+    out: list[tuple[tuple, float, int]] = []
+    ordered_types = sorted(enumerate(types), key=lambda t: -t[1].usable_area)
+    for i, sheet in ordered_types:
+        if sheet.usable_area <= 0:
+            continue
+        kmax = max(0, min(int(sheet.quantity_available), instances))
+        start = max(1, math.ceil(part_area / sheet.usable_area - 1e-9))
+        for n in range(start, min(kmax, start + 2) + 1):
+            vec = [0] * len(types)
+            vec[i] = n
+            out.append((tuple(vec), -sheet.usable_area, n))
+    seen: set[tuple] = set()
+    configs: list[tuple] = []
+    for cfg, _usable_sort, _n in sorted(out, key=lambda t: (t[1], t[2])):
+        if cfg not in seen:
+            seen.add(cfg)
+            configs.append(cfg)
+    return configs
+
+
 def _realised_counts(sheets: list[Sheet]) -> list[tuple]:
     """(name, number used) per stock type, in first-seen order."""
     order: list[str] = []
@@ -263,9 +352,9 @@ def _make_option(attempt: AttemptResult, types, settings, pp_by_id,
                  real_parts) -> ConfigOption:
     r = NestingResult(sheet=types[0])
     _assemble(r, attempt, types, settings, pp_by_id, real_parts)
-    stock_area = _stock_area(attempt)
+    stock_area = sum(s.width_mm * s.height_mm for s in r.sheets)
     placed_area = sum(pl.area for pl in attempt.placements)
-    counts = _realised_counts(attempt.sheets)
+    counts = _realised_counts(r.sheets)
     return ConfigOption(
         label=_config_label(counts, types),
         counts=counts,
@@ -283,6 +372,46 @@ def _rank_key(opt: ConfigOption) -> tuple:
     # All-placed first; then least stock area (the objective); then fewest
     # sheets; then least waste.
     return (0 if opt.all_placed else 1, opt.stock_area, opt.sheets_used, opt.waste_area)
+
+
+def _add_optimization_notice(result: NestingResult, prepared: list[PreparedPart],
+                             types: list[Sheet]) -> None:
+    if not prepared or not types:
+        return
+    part_area = sum(pp.area * pp.part.quantity for pp in prepared)
+    if part_area <= 0:
+        return
+    lb = _usable_area_lower_bound(prepared, types)
+    used_area = sum(s.width_mm * s.height_mm for s in result.sheets)
+    if used_area <= 0:
+        return
+    if result.total_parts_failed > 0:
+        msg = (
+            f"All requested parts require at least {lb} sheet(s) by area using "
+            "the largest available stock, but this is only a partial layout "
+            f"({result.total_parts_failed} instance(s) not placed). Fix the failed "
+            "parts or stock sizes before judging optimality."
+        )
+    elif result.sheet_count_used <= lb:
+        msg = (
+            f"Area lower bound is {lb} sheet(s); this layout uses "
+            f"{result.sheet_count_used}, so the sheet count is minimal by area."
+        )
+    else:
+        msg = (
+            f"Area lower bound is {lb} sheet(s) using the largest available stock; "
+            f"this layout uses {result.sheet_count_used}. Exact 2D nesting is "
+            "heuristic, so compare stock-mix configurations or increase attempts "
+            "if this is above the bound."
+        )
+    msg += (
+        f" Stock area used {used_area / 1e6:.3f} m^2; "
+        f"part area {part_area / 1e6:.3f} m^2."
+    )
+    result.notices.insert(
+        1 if result.notices else 0,
+        Notice(msg, Severity.INFO, code="OPTIMIZATION_BOUND"),
+    )
 
 
 def _feasible_fallback_bins(types: list[Sheet], total_instances: int) -> list[Sheet]:
@@ -308,13 +437,85 @@ def _has_placeable_failures(opt: ConfigOption, pp_by_id, types: list[Sheet]) -> 
     return False
 
 
+def _shrink_sheets_to_fit(result: NestingResult, types: list[Sheet]) -> None:
+    """Replace underused large sheets with the smallest stock that fits.
+
+    Packing opens bins from a candidate stock mix, but a used large sheet may end
+    up holding only parts that fit a smaller stock type. This post-pass preserves
+    the relative layout on that physical sheet, translates it to the smaller
+    sheet's usable origin, and swaps the sheet stock down when availability
+    allows.
+    """
+    if len(types) < 2 or not result.sheets:
+        return
+
+    sorted_types = sorted(types, key=lambda s: s.width_mm * s.height_mm)
+    used_counts: dict[str, int] = {}
+    for s in result.sheets:
+        used_counts[s.name] = used_counts.get(s.name, 0) + 1
+
+    for s_i, current in enumerate(list(result.sheets)):
+        placements = result.placements_on(s_i)
+        if not placements:
+            continue
+        minx = min(pl.polygon_world.bounds[0] for pl in placements)
+        miny = min(pl.polygon_world.bounds[1] for pl in placements)
+        maxx = max(pl.polygon_world.bounds[2] for pl in placements)
+        maxy = max(pl.polygon_world.bounds[3] for pl in placements)
+        width = maxx - minx
+        height = maxy - miny
+
+        chosen = current
+        for candidate in sorted_types:
+            if candidate.width_mm * candidate.height_mm > current.width_mm * current.height_mm:
+                continue
+            if candidate.name != current.name:
+                available = int(candidate.quantity_available)
+                if used_counts.get(candidate.name, 0) >= available:
+                    continue
+            if (width <= candidate.usable_width + 1e-6
+                    and height <= candidate.usable_height + 1e-6):
+                chosen = candidate
+                break
+        if chosen.name == current.name:
+            continue
+
+        dx = chosen.margin_mm - minx
+        dy = chosen.margin_mm - miny
+        for pl in placements:
+            pl.x_mm += dx
+            pl.y_mm += dy
+            pl.polygon_world = translate(pl.polygon_world, xoff=dx, yoff=dy)
+            pl.internal_world = [
+                translate(line, xoff=dx, yoff=dy)
+                for line in getattr(pl, "internal_world", ())
+            ]
+        result.sheets[s_i] = chosen
+        used_counts[current.name] = max(0, used_counts.get(current.name, 0) - 1)
+        used_counts[chosen.name] = used_counts.get(chosen.name, 0) + 1
+
+
 def _multi(prepared, types, settings, t0, progress, pp_by_id, real_parts,
            part_area, total_instances) -> NestingResult:
     candidates = _enumerate_configs(types, part_area, total_instances)
+    priority = _priority_configs(types, part_area, total_instances)
+    priority_set = set(priority)
+    ordered_candidates = priority + [c for c in candidates if c not in priority_set]
     options: list[ConfigOption] = []
     hit_limit = False
-    n = len(candidates)
-    for i, counts in enumerate(candidates):
+    best_all_placed_area: float | None = None
+    area_ordered_phase = False
+    n = len(ordered_candidates)
+    for i, counts in enumerate(ordered_candidates):
+        if i >= len(priority):
+            area_ordered_phase = True
+        cfg_area = _full_area_for_counts(counts, types)
+        if best_all_placed_area is not None and cfg_area > best_all_placed_area + 1e-6:
+            if area_ordered_phase:
+                break
+            continue
+        if not _config_can_cover_required_stock(counts, types, prepared):
+            continue
         if progress:
             progress(i, n, f"Stock configuration {i + 1}/{n}")
         bins = _bins_for(counts, types)
@@ -322,7 +523,13 @@ def _multi(prepared, types, settings, t0, progress, pp_by_id, real_parts,
             continue
         best, hl = _search(prepared, bins, settings, t0, open_until_fit=True)
         hit_limit = hit_limit or hl
-        options.append(_make_option(best, types, settings, pp_by_id, real_parts))
+        opt = _make_option(best, types, settings, pp_by_id, real_parts)
+        options.append(opt)
+        if opt.all_placed:
+            best_all_placed_area = (
+                opt.stock_area if best_all_placed_area is None
+                else min(best_all_placed_area, opt.stock_area)
+            )
         if time.perf_counter() - t0 >= settings.time_limit_sec:
             hit_limit = True
             break
@@ -354,6 +561,7 @@ def _multi(prepared, types, settings, t0, progress, pp_by_id, real_parts,
     if not ranked:
         empty = NestingResult(sheet=types[0])
         _assemble(empty, AttemptResult(), types, settings, pp_by_id, real_parts)
+        _add_optimization_notice(empty, prepared, types)
         return empty
 
     chosen = ranked[0]
@@ -368,6 +576,7 @@ def _multi(prepared, types, settings, t0, progress, pp_by_id, real_parts,
             Severity.INFO, code="CONFIG_CHOSEN",
         ),
     )
+    _add_optimization_notice(result, prepared, types)
     if hit_limit:
         result.notices.append(Notice(
             f"Stopped the stock-mix search at the {settings.time_limit_sec:g}s time limit.",
@@ -382,6 +591,8 @@ def _assemble(result, attempt, types, settings, pp_by_id, real_parts):
     result.placements = attempt.placements
     result.sheet_count_used = attempt.sheets_used
     result.sheets = list(attempt.sheets)
+    result.sheet = result.sheets[0] if result.sheets else types[0]
+    _shrink_sheets_to_fit(result, types)
     result.sheet = result.sheets[0] if result.sheets else types[0]
 
     used = attempt.sheets_used

@@ -69,6 +69,13 @@ def test_open_contour_reported_and_skipped():
     assert "OPEN_CONTOUR" in _codes(res)
 
 
+def test_small_drafting_gap_closes_with_default_snap():
+    res = _import(dxfgen.small_gap_rectangle())
+    assert len(res.parts) == 1
+    assert math.isclose(res.parts[0].area, 6000.0, rel_tol=1e-6)
+    assert "OPEN_CONTOUR" not in _codes(res)
+
+
 def test_internal_open_cuts_preserved():
     res = _import(dxfgen.internal_micro_joints())
     assert len(res.parts) == 1
@@ -134,11 +141,20 @@ def test_common_cut_rectangles_two_parts():
         assert math.isclose(p.area, 1500.0, rel_tol=1e-6)
 
 
+def test_sheet_frame_is_ignored_when_it_wraps_many_profiles():
+    res = _import(dxfgen.sheet_frame_with_nested_parts(), group_identical=False)
+    assert "OUTER_FRAME_IGNORED" in _codes(res)
+    assert len(res.parts) == 8
+    assert all(p.width < 200 for p in res.parts)
+    assert sum(len(p.holes) for p in res.parts) == 2
+
+
 def test_identical_parts_grouped_by_quantity():
     # large_file is a 20x20 grid of identical rects -> 1 grouped part qty 400.
     res = _import(dxfgen.large_file(rows=5, cols=4))
     assert len(res.parts) == 1
     assert res.parts[0].quantity == 20
+    assert len(res.parts[0].metadata["preview_instances"]) == 20
 
 
 def test_garbage_file_is_handled_not_crashed(tmp_path):

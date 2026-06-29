@@ -46,6 +46,10 @@ def test_window_full_cycle(app, tmp_path):
     dxfgen.multiple_parts().saveas(f)
     win.import_paths([str(f)], ask_layers=False)
     assert len(win.parts) == 5  # 2 manual + 3 from the combined DXF
+    assert win.result is None
+    assert win.lbl_sheet.text().startswith("Import preview")
+    assert win.canvas.scene().items()
+    assert not win.btn_export.isEnabled()
 
     win.sp_sheet_w.setValue(500)
     win.sp_sheet_h.setValue(400)
