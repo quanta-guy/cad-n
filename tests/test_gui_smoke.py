@@ -33,7 +33,7 @@ def _pump_until(app, predicate, timeout=30.0):
     return False
 
 
-def test_window_full_cycle(app, tmp_path):
+def test_window_full_cycle(app, tmp_path, monkeypatch):
     from cad_n.ui.main_window import MainWindow
 
     win = MainWindow()
@@ -60,9 +60,23 @@ def test_window_full_cycle(app, tmp_path):
     assert _pump_until(app, lambda: win.result is not None), "nest did not finish"
     assert win.result.total_parts_nested > 0
 
-    out = tmp_path / "out.dxf"
-    rep = win.export_dxf(str(out))
-    assert rep.success and out.exists()
+    from PySide6.QtWidgets import QFileDialog, QInputDialog
+    out = tmp_path / "Workshop Project.dxf"
+    monkeypatch.setattr(QInputDialog, "getText", lambda *a, **kw: ("Workshop Project", True))
+
+    def choose_path(parent, title, suggested, filters):
+        assert suggested == "Workshop Project.dxf"
+        return str(out), filters
+
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", choose_path)
+    win.on_export_dxf_clicked()
+    assert out.exists()
+    assert (tmp_path / "Workshop Project_parts.xlsx").exists()
+
+    # Cancelling the project prompt must not open a save dialog or export.
+    monkeypatch.setattr(QInputDialog, "getText", lambda *a, **kw: ("", False))
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a: pytest.fail("Save dialog opened after cancel"))
+    win.on_export_dxf_clicked()
 
     job = tmp_path / "job.json"
     win.save_job(str(job))

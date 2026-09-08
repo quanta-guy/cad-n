@@ -253,6 +253,21 @@ def sheet_frame_with_nested_parts():
     return doc
 
 
+def part_with_nested_closed_details():
+    """One physical part with a closed internal cutout and small closed detail
+    profiles inside that cutout. The inner details must stay attached to the
+    outer part instead of becoming independent nestable parts.
+    """
+    doc = _new()
+    msp = doc.modelspace()
+    _rect(msp, 0, 0, 300, 200)
+    _rect(msp, 70, 55, 160, 90)
+    _rect(msp, 95, 75, 20, 18)
+    _rect(msp, 185, 75, 20, 18)
+    msp.add_line((40, 40), (100, 40), dxfattribs={"layer": "CUT"})
+    return doc
+
+
 ALL_BUILDERS = {
     "01_simple_rectangle": simple_rectangle,
     "02_rectangle_with_hole": rectangle_with_hole,
@@ -271,4 +286,5 @@ ALL_BUILDERS = {
     "14_part_too_large": part_too_large,
     "15_common_cut_rectangles": common_cut_rectangles,
     "16_sheet_frame_with_nested_parts": sheet_frame_with_nested_parts,
+    "17_part_with_nested_closed_details": part_with_nested_closed_details,
 }

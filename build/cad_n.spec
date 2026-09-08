@@ -14,6 +14,11 @@ Notes / packaging gotchas (see build_notes.md):
 
 import os
 
+# Qt uses Windows' ICU API. Prefer System32 over unrelated tools on PATH
+# (for example Poppler), whose ICU DLL exports are not compatible with Qt.
+if os.name == "nt":
+    os.environ["PATH"] = os.path.join(os.environ["SystemRoot"], "System32") + os.pathsep + os.environ.get("PATH", "")
+
 from PyInstaller.utils.hooks import (
     collect_data_files,
     collect_dynamic_libs,

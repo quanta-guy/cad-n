@@ -7,7 +7,7 @@ router / CNC workflows.
 Built using only open-source libraries
 (**ezdxf, Shapely, PySide6, numpy**) and public nesting techniques.
 
-> Status: **v0.4.0 — first public release.** It loads DXFs, detects parts, nests
+> Status: **v0.5.0.** It loads DXFs, detects parts, nests
 > them without overlap (including across two stock sizes), reports utilization,
 > and exports a clean DXF with optional common-line cutting. Part-in-part,
 > non-rectangular sheets and NFP optimization are *future* work.
@@ -41,6 +41,11 @@ Built using only open-source libraries
   cut once (`COMMON_CUT` layer) instead of as doubled coincident lines.
 - **Save / load jobs** (self-contained JSON — survives moved source files).
 - **CSV report** of the job.
+- **Excel part report** automatically accompanies DXF export, named for your
+  project, with sheet assignments and part areas in mm² and in².
+- **Rectangle packing** compares tightest-fit free-space placement with the
+  original bottom-left method; optional genetic search explores part order and
+  rotation choices.
 - Packaged as a **Windows `.exe`** (PyInstaller) with an optional Inno Setup installer.
 
 ## Quick start (from source)
@@ -59,7 +64,7 @@ binary wheels.
 
 ```bat
 pip install -r requirements-dev.txt
-pytest                          # 65 tests
+pytest                          # 84 tests
 python tools/make_fixtures.py   # write sample DXFs
 python tools/fetch_real_dxf.py  # download real-world DXFs (optional, needs internet)
 python tools/benchmark.py       # full-pipeline benchmark over every DXF
@@ -96,7 +101,7 @@ cad_n/
     reports.py         CSV + summary
     job_io.py          self-contained JSON jobs
   ui/                  PySide6: main_window, preview_canvas, import/settings dialogs, worker
-tests/                 65 tests + dxfgen fixture builders + downloaded real DXFs
+tests/                 84 tests + dxfgen fixture builders + downloaded real DXFs
 tools/                 make_fixtures / fetch_real_dxf / benchmark / render / make_icon / screenshot
 build/                 PyInstaller spec, version resource, launcher, Inno Setup script
 ```
@@ -117,7 +122,8 @@ build/                 PyInstaller spec, version resource, launcher, Inno Setup 
 
 ## Limitations (honest)
 
-- Greedy bottom-left-fill, not a commercial-grade optimizer. Good, not optimal.
+- Hybrid bottom-left/free-rectangle packing with optional genetic search;
+  mathematical optimality is not guaranteed.
 - No part-in-part nesting, non-rectangular sheets, or NFP optimization yet.
 - Large jobs (hundreds of parts) take seconds per attempt; the time limit caps it.
 - Not every exotic DXF entity is supported; unsupported entities are reported, not guessed.

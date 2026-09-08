@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -187,11 +188,17 @@ class MainWindow(QMainWindow):
             self.cb_strategy.addItem(label)
         self.sp_attempts = QSpinBox(); self.sp_attempts.setRange(1, 200); self.sp_attempts.setValue(6)
         self.sp_timelimit = self._dspin(20, 1, 600)
+        self.chk_ga = QCheckBox("Genetic optimizer")
+        self.chk_ga.setToolTip(
+            "Evolve part order and preferred rotations, then keep the best "
+            "valid layout found within the time limit.")
+        self.chk_ga.setChecked(True)
         nf.addRow("Part spacing (mm)", self.sp_spacing)
         nf.addRow("Kerf (mm)", self.sp_kerf)
         nf.addRow("Rotations", self.cb_rot)
         nf.addRow("Strategy", self.cb_strategy)
         nf.addRow("Attempts", self.sp_attempts)
+        nf.addRow("Optimizer", self.chk_ga)
         nf.addRow("Time limit (s)", self.sp_timelimit)
         lv.addWidget(nest_box)
 
@@ -261,7 +268,7 @@ class MainWindow(QMainWindow):
         self.btn_best = QPushButton("Best nests...")
         self.btn_best.setToolTip("Browse the highest-utilization nests and reload one into the preview.")
         self.btn_best.clicked.connect(self.on_best_nests_clicked)
-        self.btn_export = QPushButton("Export DXF..."); self.btn_export.clicked.connect(self.on_export_dxf_clicked)
+        self.btn_export = QPushButton("Export DXF + Excel..."); self.btn_export.clicked.connect(self.on_export_dxf_clicked)
         self.btn_csv = QPushButton("Export report (CSV)..."); self.btn_csv.clicked.connect(self.on_export_csv_clicked)
         self.btn_export.setEnabled(False); self.btn_csv.setEnabled(False)
         bh.addWidget(self.chk_common); bh.addWidget(self.btn_best)
@@ -294,7 +301,7 @@ class MainWindow(QMainWindow):
             (None, None),
             ("Best nests...", self.on_best_nests_clicked),
             (None, None),
-            ("Export nested DXF...", self.on_export_dxf_clicked),
+            ("Export DXF + Excel...", self.on_export_dxf_clicked),
             ("Export report (CSV)...", self.on_export_csv_clicked),
             (None, None),
             ("Exit", self.close),
@@ -343,6 +350,7 @@ class MainWindow(QMainWindow):
             part_spacing_mm=self.sp_spacing.value(), kerf_mm=self.sp_kerf.value(),
             rotation_step_deg=rot, placement_strategy=strat,
             attempt_count=self.sp_attempts.value(), time_limit_sec=self.sp_timelimit.value(),
+            enable_genetic_search=self.chk_ga.isChecked(),
         )
 
     # ----------------------------------------------------------- importing #
@@ -519,9 +527,29 @@ class MainWindow(QMainWindow):
     def on_export_dxf_clicked(self) -> None:
         if not self.result:
             return
-        path, _ = QFileDialog.getSaveFileName(self, "Export nested DXF", "nested.dxf",
+        previous = self.last_export_path or self.job_path
+        name = os.path.splitext(os.path.basename(previous))[0] if previous else ""
+        while True:
+            name, accepted = QInputDialog.getText(
+                self, "Export project", "Project name:", text=name)
+            if not accepted:
+                return
+            name = name.strip()
+            reserved = {"CON", "PRN", "AUX", "NUL"} | {
+                f"{prefix}{i}" for prefix in ("COM", "LPT") for i in range(1, 10)}
+            if (name and not name.endswith(".")
+                    and not any(c in '<>:"/\\|?*' or ord(c) < 32 for c in name)
+                    and name.split(".")[0].upper() not in reserved):
+                break
+            QMessageBox.warning(self, "Invalid project name",
+                                "Enter a valid file name without special characters "
+                                '(< > : " / \\ | ? *), a trailing dot, or a reserved Windows name.')
+        suggested = os.path.join(os.path.dirname(previous), name + ".dxf") if previous else name + ".dxf"
+        path, _ = QFileDialog.getSaveFileName(self, "Export DXF + Excel report", suggested,
                                               "DXF files (*.dxf)")
         if path:
+            if not path.lower().endswith(".dxf"):
+                path += ".dxf"
             self.export_dxf(path)
 
     def export_dxf(self, path) -> dxe.ExportReport:
@@ -532,6 +560,15 @@ class MainWindow(QMainWindow):
         if rep.success:
             self.last_export_path = path
             msg = f"Exported {rep.cut_entities} cut profiles to {path}"
+            from ..core.excel_report import write_excel_report
+            report_path = os.path.splitext(path)[0] + "_parts.xlsx"
+            try:
+                write_excel_report(res, report_path)
+                msg += f"; Excel part report: {report_path}"
+            except Exception as exc:
+                QMessageBox.warning(self, "Excel report failed",
+                                    f"The DXF was exported successfully, but the Excel "
+                                    f"report could not be written: {exc}")
             if opts.common_line and rep.common_entities:
                 msg += f" ({rep.common_entities} shared edges on COMMON_CUT)"
             self.statusBar().showMessage(msg)
@@ -598,6 +635,7 @@ class MainWindow(QMainWindow):
         self.sp_kerf.setValue(job.settings.kerf_mm)
         self.sp_attempts.setValue(job.settings.attempt_count)
         self.sp_timelimit.setValue(job.settings.time_limit_sec)
+        self.chk_ga.setChecked(job.settings.enable_genetic_search)
         self.job_path = path
         self._reset_layout_after_part_change()
         self._refresh_part_table()
@@ -640,6 +678,7 @@ class MainWindow(QMainWindow):
         s = NestingSettings.from_dict(payload.get("settings"))
         self.sp_spacing.setValue(s.part_spacing_mm); self.sp_kerf.setValue(s.kerf_mm)
         self.sp_attempts.setValue(s.attempt_count); self.sp_timelimit.setValue(s.time_limit_sec)
+        self.chk_ga.setChecked(s.enable_genetic_search)
         for i, (_, val) in enumerate(_ROT_OPTIONS):
             if val == s.rotation_step_deg:
                 self.cb_rot.setCurrentIndex(i); break

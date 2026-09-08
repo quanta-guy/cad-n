@@ -149,6 +149,17 @@ def test_sheet_frame_is_ignored_when_it_wraps_many_profiles():
     assert sum(len(p.holes) for p in res.parts) == 2
 
 
+def test_nested_closed_details_stay_with_parent_part():
+    res = _import(dxfgen.part_with_nested_closed_details(), group_identical=False)
+    assert len(res.parts) == 1
+    p = res.parts[0]
+    assert len(p.holes) == 1
+    # Two closed details inside the cutout plus one open internal line.
+    assert len(p.internal_paths) == 3
+    assert "NESTED_DETAILS_MERGED" in _codes(res)
+    assert "INTERNAL_CUTS_KEPT" in _codes(res)
+
+
 def test_identical_parts_grouped_by_quantity():
     # large_file is a 20x20 grid of identical rects -> 1 grouped part qty 400.
     res = _import(dxfgen.large_file(rows=5, cols=4))

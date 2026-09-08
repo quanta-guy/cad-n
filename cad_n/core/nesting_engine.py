@@ -77,6 +77,30 @@ def _build_orderings(prepared: list[PreparedPart],
     return orderings[:attempt_count]
 
 
+def _flat_instances(prepared: list[PreparedPart]) -> list[PreparedPart]:
+    instances: list[PreparedPart] = []
+    for pp in prepared:
+        instances.extend([pp] * pp.part.quantity)
+    return instances
+
+
+def _order_to_instance_indices(
+    prepared: list[PreparedPart],
+    order: list[PreparedPart],
+) -> list[int]:
+    """Translate a part-level order into flat instance indexes."""
+    buckets: dict[int, list[int]] = {}
+    idx = 0
+    for pp in prepared:
+        count = max(0, int(pp.part.quantity))
+        buckets[id(pp)] = list(range(idx, idx + count))
+        idx += count
+    out: list[int] = []
+    for pp in order:
+        out.extend(buckets.get(id(pp), ()))
+    return out
+
+
 def _fits_any(pp: PreparedPart, sheets: list[Sheet]) -> bool:
     """True if the part fits the usable area of at least one stock type."""
     eps = 1e-6
@@ -147,10 +171,148 @@ def _score(attempt: AttemptResult) -> tuple:
     return (-len(attempt.placements), _stock_area(attempt), used_total)
 
 
+def _crossover_order(a: list[int], b: list[int], rng: random.Random) -> list[int]:
+    n = len(a)
+    if n < 2:
+        return list(a)
+    lo = rng.randrange(n)
+    hi = rng.randrange(lo + 1, n + 1)
+    child: list[int | None] = [None] * n
+    child[lo:hi] = a[lo:hi]
+    used = set(a[lo:hi])
+    fill = [x for x in b if x not in used]
+    k = 0
+    for i in range(n):
+        if child[i] is None:
+            child[i] = fill[k]
+            k += 1
+    return [int(x) for x in child]
+
+
+def _mutate_chromosome(
+    order: list[int],
+    variants: list[int],
+    variant_counts: list[int],
+    rng: random.Random,
+) -> None:
+    n = len(order)
+    if n > 1 and rng.random() < 0.75:
+        i, j = rng.sample(range(n), 2)
+        order[i], order[j] = order[j], order[i]
+    if n > 3 and rng.random() < 0.35:
+        i, j = sorted(rng.sample(range(n), 2))
+        order[i:j + 1] = reversed(order[i:j + 1])
+    rotatable = [i for i, count in enumerate(variant_counts) if count > 1]
+    if rotatable and rng.random() < 0.75:
+        for _ in range(max(1, min(4, n // 6))):
+            i = rng.choice(rotatable)
+            variants[i] = rng.randrange(variant_counts[i])
+
+
+def _genetic_search(
+    prepared: list[PreparedPart],
+    bins: list[Sheet],
+    settings: NestingSettings,
+    t0: float,
+    open_until_fit: bool,
+    best: AttemptResult,
+    best_key: tuple,
+    target_sheet_count: int | None,
+) -> tuple[AttemptResult, tuple, bool]:
+    """Evolve instance order + forced orientation, keeping only better layouts."""
+    if not settings.enable_genetic_search:
+        return best, best_key, False
+
+    instances = _flat_instances(prepared)
+    n = len(instances)
+    if n < 2:
+        return best, best_key, False
+
+    population_size = max(4, min(40, int(settings.genetic_population)))
+    generations = max(1, min(80, int(settings.genetic_generations)))
+    variant_counts = [max(1, len(pp.variants)) for pp in instances]
+    total_instances = n
+    rng = random.Random(settings.random_seed + 7919 * len(bins) + 104729 * n)
+    hit_limit = False
+
+    population: list[tuple[list[int], list[int]]] = []
+    for order in _build_orderings(prepared, settings):
+        idx_order = _order_to_instance_indices(prepared, order)
+        if len(idx_order) == n:
+            population.append((idx_order, [0] * n))
+    while len(population) < population_size:
+        idx_order = list(range(n))
+        rng.shuffle(idx_order)
+        variants = [rng.randrange(count) for count in variant_counts]
+        population.append((idx_order, variants))
+
+    seen: set[tuple[tuple[int, ...], tuple[int, ...]]] = set()
+
+    def evaluate(order: list[int], variants: list[int]) -> tuple:
+        nonlocal best, best_key
+        sig = (tuple(order), tuple(variants))
+        if sig in seen:
+            return (math.inf, math.inf, math.inf)
+        seen.add(sig)
+        attempt = run_attempt(
+            prepared,
+            order,
+            bins,
+            settings,
+            open_until_fit=open_until_fit,
+            variant_priority=variants,
+            force_variant_choice=True,
+        )
+        key = _score(attempt)
+        if key < best_key:
+            best, best_key = attempt, key
+        return key
+
+    for _generation in range(generations):
+        scored: list[tuple[tuple, list[int], list[int]]] = []
+        for order, variants in population:
+            if time.perf_counter() - t0 >= settings.time_limit_sec:
+                hit_limit = True
+                break
+            key = evaluate(order, variants)
+            if not math.isinf(key[0]):
+                scored.append((key, order, variants))
+            if (
+                target_sheet_count is not None
+                and len(best.placements) == total_instances
+                and best.sheets_used <= target_sheet_count
+            ):
+                return best, best_key, hit_limit
+        if hit_limit or not scored:
+            break
+
+        scored.sort(key=lambda item: item[0])
+        survivor_count = max(2, min(len(scored), population_size // 3))
+        survivors = scored[:survivor_count]
+        next_population = [
+            (list(order), list(variants))
+            for _key, order, variants in survivors[:2]
+        ]
+        while len(next_population) < population_size:
+            p1 = rng.choice(survivors)
+            p2 = rng.choice(survivors)
+            order = _crossover_order(p1[1], p2[1], rng)
+            variants = [
+                p1[2][i] if rng.random() < 0.5 else p2[2][i]
+                for i in range(n)
+            ]
+            _mutate_chromosome(order, variants, variant_counts, rng)
+            next_population.append((order, variants))
+        population = next_population
+
+    return best, best_key, hit_limit
+
+
 def _search(prepared: list[PreparedPart], bins: list[Sheet],
             settings: NestingSettings, t0: float,
             open_until_fit: bool = False,
-            target_sheet_count: int | None = None) -> tuple[AttemptResult, bool]:
+            target_sheet_count: int | None = None,
+            enable_genetic: bool = True) -> tuple[AttemptResult, bool]:
     """Best AttemptResult over several part orderings packed into ``bins``.
 
     Returns ``(best, hit_time_limit)``."""
@@ -163,6 +325,20 @@ def _search(prepared: list[PreparedPart], bins: list[Sheet],
         key = _score(attempt)
         if best_key is None or key < best_key:
             best, best_key = attempt, key
+        if time.perf_counter() - t0 < settings.time_limit_sec:
+            rect_attempt = run_attempt(
+                order, [], bins, settings, open_until_fit=open_until_fit,
+                free_rectangles=True)
+            rect_key = _score(rect_attempt)
+            if rect_key < best_key:
+                best, best_key = rect_attempt, rect_key
+        if time.perf_counter() - t0 < settings.time_limit_sec:
+            rect_attempt = run_attempt(
+                order, [], bins, settings, open_until_fit=open_until_fit,
+                free_rectangles=True, dynamic_order=True)
+            rect_key = _score(rect_attempt)
+            if rect_key < best_key:
+                best, best_key = rect_attempt, rect_key
         if (
             target_sheet_count is not None
             and len(attempt.placements) == total_instances
@@ -173,6 +349,18 @@ def _search(prepared: list[PreparedPart], bins: list[Sheet],
             hit_limit = True
             break
     assert best is not None
+    if enable_genetic and not hit_limit:
+        best, best_key, ga_hit = _genetic_search(
+            prepared,
+            bins,
+            settings,
+            t0,
+            open_until_fit,
+            best,
+            best_key,
+            target_sheet_count,
+        )
+        hit_limit = hit_limit or ga_hit
     return best, hit_limit
 
 
@@ -228,6 +416,7 @@ def nest(
         result = _multi(prepared, valid_types, settings, t0, progress,
                         pp_by_id, real_parts, part_area, total_instances)
 
+    _add_genetic_notice(result, settings)
     result.runtime_sec = time.perf_counter() - t0
     if progress:
         progress(1, 1, "Done")
@@ -414,6 +603,22 @@ def _add_optimization_notice(result: NestingResult, prepared: list[PreparedPart]
     )
 
 
+def _add_genetic_notice(result: NestingResult, settings: NestingSettings) -> None:
+    if not settings.enable_genetic_search:
+        return
+    result.notices.insert(
+        1 if result.notices else 0,
+        Notice(
+            "Genetic optimizer enabled: evolved part order and preferred "
+            f"rotations with population {settings.genetic_population} for up "
+            f"to {settings.genetic_generations} generation(s), bounded by the "
+            "nesting time limit.",
+            Severity.INFO,
+            code="GENETIC_SEARCH",
+        ),
+    )
+
+
 def _feasible_fallback_bins(types: list[Sheet], total_instances: int) -> list[Sheet]:
     """A bin list guaranteed to hold every *placeable* instance: as many of each
     stock type as availability allows (bounded by the instance count), cheapest
@@ -435,6 +640,56 @@ def _has_placeable_failures(opt: ConfigOption, pp_by_id, types: list[Sheet]) -> 
         if pp is not None and _fits_any(pp, types):
             return True
     return False
+
+
+def _counts_tuple_from_option(opt: ConfigOption, types: list[Sheet]) -> tuple:
+    by_name = {name: n for name, n in opt.counts}
+    return tuple(int(by_name.get(t.name, 0)) for t in types)
+
+
+def _refine_ranked_with_genetic(
+    ranked: list[ConfigOption],
+    prepared: list[PreparedPart],
+    types: list[Sheet],
+    settings: NestingSettings,
+    t0: float,
+    pp_by_id,
+    real_parts,
+) -> tuple[list[ConfigOption], bool]:
+    """Run GA only on the best realised mixes after broad stock search."""
+    if not settings.enable_genetic_search or not ranked:
+        return ranked, False
+
+    hit_limit = False
+    refined: list[ConfigOption] = []
+    refined_keys: set[tuple] = set()
+    for opt in ranked[:3]:
+        if time.perf_counter() - t0 >= settings.time_limit_sec:
+            hit_limit = True
+            break
+        counts = _counts_tuple_from_option(opt, types)
+        if not any(counts):
+            continue
+        bins = _bins_for(counts, types)
+        attempt, hl = _search(
+            prepared,
+            bins,
+            settings,
+            t0,
+            open_until_fit=True,
+            enable_genetic=True,
+        )
+        hit_limit = hit_limit or hl
+        ga_opt = _make_option(attempt, types, settings, pp_by_id, real_parts)
+        if _rank_key(ga_opt) <= _rank_key(opt):
+            refined.append(ga_opt)
+            refined_keys.add(tuple(ga_opt.counts))
+
+    merged = refined + [
+        opt for opt in ranked
+        if tuple(opt.counts) not in refined_keys
+    ]
+    return sorted(merged, key=_rank_key), hit_limit
 
 
 def _shrink_sheets_to_fit(result: NestingResult, types: list[Sheet]) -> None:
@@ -521,7 +776,14 @@ def _multi(prepared, types, settings, t0, progress, pp_by_id, real_parts,
         bins = _bins_for(counts, types)
         if not bins:
             continue
-        best, hl = _search(prepared, bins, settings, t0, open_until_fit=True)
+        best, hl = _search(
+            prepared,
+            bins,
+            settings,
+            t0,
+            open_until_fit=True,
+            enable_genetic=False,
+        )
         hit_limit = hit_limit or hl
         opt = _make_option(best, types, settings, pp_by_id, real_parts)
         options.append(opt)
@@ -544,7 +806,14 @@ def _multi(prepared, types, settings, t0, progress, pp_by_id, real_parts,
     if best_so_far is None or _has_placeable_failures(best_so_far, pp_by_id, types):
         fb_bins = _feasible_fallback_bins(types, total_instances)
         if fb_bins:
-            fb, hl = _search(prepared, fb_bins, settings, t0, open_until_fit=True)
+            fb, hl = _search(
+                prepared,
+                fb_bins,
+                settings,
+                t0,
+                open_until_fit=True,
+                enable_genetic=False,
+            )
             hit_limit = hit_limit or hl
             options.append(_make_option(fb, types, settings, pp_by_id, real_parts))
 
@@ -564,6 +833,16 @@ def _multi(prepared, types, settings, t0, progress, pp_by_id, real_parts,
         _add_optimization_notice(empty, prepared, types)
         return empty
 
+    ranked, ga_hit_limit = _refine_ranked_with_genetic(
+        ranked,
+        prepared,
+        types,
+        settings,
+        t0,
+        pp_by_id,
+        real_parts,
+    )
+    hit_limit = hit_limit or ga_hit_limit
     chosen = ranked[0]
     result = chosen.result
     result.configurations = ranked[:_MAX_KEEP]

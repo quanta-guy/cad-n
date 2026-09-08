@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cad-n"
-version = "0.4.0"
+version = "0.5.0"
 description = "CAD-N - 2D true-shape nesting tool for DXF parts on rectangular sheet stock"
 readme = "README.md"
 requires-python = ">=3.11"

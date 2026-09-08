@@ -3,6 +3,24 @@
 CAD-N arranges your DXF parts onto sheet stock so you waste less material and
 get a clean DXF to cut. This guide walks through a normal job.
 
+Nesting now compares the original bottom-left placement with a free-rectangle
+packing method. It measures the leftover width and height in each free space,
+chooses the tightest fit, and also tries choosing the next part to fill a gap.
+The best evaluated layout wins: most parts placed, then least stock area, then
+tightest used length. This improves rectangle packing without guaranteeing an
+optimal solution. Genetic search remains an optional additional search.
+
+Export first asks for a project name, then lets you choose the save location.
+For example, entering `Workshop` suggests `Workshop.dxf` and also writes
+`Workshop_parts.xlsx` in the same folder for
+the currently selected layout. The workbook contains sheet stock sizes, part
+counts, stock utilization, and one row per placed part with sheet number,
+part name/ID, position, rotation, mirroring, and net area in mm² and in².
+Net area subtracts holes; open internal cuts remove no area. One square inch
+equals 645.16 mm². Unplaced parts, if any, appear on a separate tab.
+If the spreadsheet cannot be written (for example, it is open in Excel), the
+application reports the failure and keeps the successfully exported DXF.
+
 ---
 
 ## 1. Start the program

@@ -4,6 +4,28 @@ All notable changes to CAD-N are recorded here.
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-09-08
+
+### Added
+- Rectangle packing with maximal free spaces, tightest-fit scoring, and dynamic
+  part selection, compared against the existing bottom-left placement method.
+  A regression fixture drops from three sheets to two; results remain heuristic.
+- Optional genetic search over part order and orientation, enabled by default in
+  the desktop UI, with settings preserved in saved jobs.
+- Excel part reports alongside DXF exports: per-sheet totals and each placed
+  part's identity, position, rotation, mirroring, and net area in mm² and in².
+  Unplaced parts are reported separately. No Excel installation is required.
+- Project-name prompt before export, with matching `<project>.dxf` and
+  `<project>_parts.xlsx` filenames.
+- Import preview preserving original part positions, enclosing-frame detection,
+  and post-nesting replacement of underused sheets with smaller available stock.
+
+### Fixed
+- Nested closed detail profiles remain attached to their parent part as internal
+  cut paths instead of being treated as separate parts.
+- Windows builds prefer system DLLs over unrelated tools on PATH, preventing
+  an incompatible ICU DLL from breaking packaged Qt GUI startup.
+
 ### Fixed
 - **Multi-stock nesting could drop placeable parts instead of opening another
   sheet.** With two stock sizes the engine searches stock-mix configurations

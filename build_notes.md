@@ -30,7 +30,7 @@ python tools\make_fixtures.py      REM sample DXFs bundled with the app
 
 ## Build stages (doc 15.1)
 
-1. **Developer run** — `python -m cad_n`, and `pytest` (65 tests must pass).
+1. **Developer run** — `python -m cad_n`, and `pytest` (84 tests must pass).
 2. **One-folder build** (debuggable, used for testing):
    ```bat
    pyinstaller build\cad_n.spec --noconfirm
@@ -62,6 +62,11 @@ set CADN_SELFTEST=1  & dist\CAD-N\CAD-N.exe   REM shows the window then quits, e
 just import. Both were confirmed returning exit code 0 on the build machine.
 
 ## Packaging gotchas & fixes
+
+- **ICU DLL selection** — the spec prioritizes Windows System32 during DLL
+  discovery. An unrelated ICU library from tools such as Poppler on PATH can
+  otherwise be bundled and cause `DLL load failed while importing QtGui`.
+  Always run the frozen GUI startup test as well as the geometry self-check.
 
 - **Shapely GEOS DLLs** — bundled via `collect_dynamic_libs("shapely")` in the
   spec. Symptom if missing: `ImportError: ... geos` at start.

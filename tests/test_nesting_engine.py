@@ -129,6 +129,52 @@ def test_deterministic_with_seed():
     assert math.isclose(r1.total_utilization, r2.total_utilization, rel_tol=1e-9)
 
 
+def test_genetic_search_finds_order_that_greedy_misses(monkeypatch):
+    # Isolate the GA from the rectangle search, which also solves this fixture.
+    import cad_n.core.nesting_engine as engine
+    original = engine.run_attempt
+
+    def blf_only(*args, **kwargs):
+        kwargs.pop("free_rectangles", None)
+        kwargs.pop("dynamic_order", None)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(engine, "run_attempt", blf_only)
+    sheet = Sheet("S", 100, 100, margin_mm=0)
+    parts = [
+        make_rectangle_part("A", 20, 20, allow_rotation=False),
+        make_rectangle_part("B", 30, 60, allow_rotation=False),
+        make_rectangle_part("C", 60, 50, allow_rotation=False),
+        make_rectangle_part("D", 80, 30, allow_rotation=False),
+    ]
+    plain_settings = NestingSettings(part_spacing_mm=0, attempt_count=1, rotation_step_deg=0)
+    ga_settings = NestingSettings(
+        part_spacing_mm=0,
+        attempt_count=1,
+        rotation_step_deg=0,
+        enable_genetic_search=True,
+        genetic_population=24,
+        genetic_generations=20,
+        random_seed=3,
+    )
+    plain = nest(
+        parts,
+        sheet,
+        plain_settings,
+    )
+    ga = nest(
+        parts,
+        sheet,
+        ga_settings,
+    )
+
+    assert plain.sheet_count_used == 2
+    assert ga.sheet_count_used == 1
+    assert ga.total_parts_failed == 0
+    assert any(n.code == "GENETIC_SEARCH" for n in ga.notices)
+    _assert_valid(ga, sheet, ga_settings)
+
+
 def _assert_valid_multi(result, settings):
     """Invariants for a (possibly heterogeneous) multi-sheet result."""
     for pl in result.placements:
@@ -235,3 +281,39 @@ def test_part_with_hole_area_counts_net():
     assert res.total_parts_nested == 1
     # net area 10000-400 = 9600; utilization = 9600/40000 = 0.24
     assert math.isclose(res.utilization_by_sheet[0], 9600 / 40000, rel_tol=1e-6)
+
+
+def test_free_rectangle_search_saves_a_sheet_over_bottom_left():
+    from cad_n.core.placement import prepare_part, run_attempt
+
+    dims = [(50, 20), (80, 70), (70, 80), (20, 50),
+            (30, 70), (40, 20), (20, 40), (80, 20)]
+    parts = [make_rectangle_part(str(i), w, h) for i, (w, h) in enumerate(dims)]
+    settings = NestingSettings(part_spacing_mm=0, attempt_count=1)
+    sheet = Sheet("S", 100, 100)
+    prepared = sorted([prepare_part(p, settings) for p in parts], key=lambda p: -p.area)
+    baseline = run_attempt(prepared, [], [sheet]*8, settings)
+    result = nest(parts, sheet, settings)
+    assert baseline.sheets_used == 3
+    assert result.sheet_count_used == 2
+    assert result.total_parts_nested == 8
+    _assert_valid(result, sheet, settings)
+
+
+@pytest.mark.parametrize("gap", [0, 2.5])
+def test_free_rectangle_packing_respects_margins_clearance_and_internal_lines(gap):
+    from cad_n.core.placement import prepare_part, run_attempt
+    from cad_n.core.models import NestingResult
+
+    settings = NestingSettings(part_spacing_mm=gap, kerf_mm=0.5)
+    sheet = Sheet("S", 130, 100, margin_mm=5)
+    part = make_rectangle_part("P", 40, 20, quantity=12,
+                               internal_paths=[[(5, 5), (15, 5)]])
+    attempt = run_attempt([prepare_part(part, settings)], [], [sheet]*12,
+                          settings, free_rectangles=True)
+    result = NestingResult(placements=attempt.placements)
+    assert len(attempt.placements) == 12
+    _assert_valid(result, sheet, settings)
+    for p in attempt.placements:
+        assert len(p.internal_world) == 1
+        assert p.polygon_world.covers(p.internal_world[0])

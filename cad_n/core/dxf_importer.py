@@ -101,6 +101,7 @@ class ImportOptions:
     explode_blocks: bool = True
     group_identical: bool = True
     ignore_enclosing_frame: bool = True
+    merge_nested_details: bool = True
     tolerances: Tolerances = field(default_factory=lambda: DEFAULT_TOLERANCES)
 
 
@@ -400,11 +401,28 @@ def extract(doc, path: str, options: ImportOptions, summary: Optional[DxfSummary
             )
         )
 
+    closed_detail_internals: dict[int, list] = {}
+    if options.merge_nested_details:
+        clean.polygons, closed_detail_internals, merged_nested = _merge_nested_details(
+            clean.polygons, tol.snap_tolerance_mm
+        )
+        if merged_nested:
+            result.notices.append(
+                Notice(
+                    f"Merged {merged_nested} nested closed detail profile(s) into "
+                    "their parent part instead of importing them as separate parts.",
+                    Severity.INFO,
+                    code="NESTED_DETAILS_MERGED",
+                )
+            )
+
     # Preserve open internal cut linework (micro-joints / chase outlines) by
     # attaching each leftover open path to the part whose boundary contains it.
     internals_by_idx, orphan_open = _assign_internal_paths(
         clean.polygons, clean.internal_paths, tol.snap_tolerance_mm
     )
+    for idx, paths in closed_detail_internals.items():
+        internals_by_idx.setdefault(idx, []).extend(paths)
 
     stem = os.path.splitext(os.path.basename(path))[0]
     parts = _polygons_to_parts(
@@ -511,6 +529,86 @@ def _assign_internal_paths(polygons, paths, snap_tol: float = 0.05):
             continue
         internals.setdefault(hit, []).append([(float(x), float(y)) for x, y in path])
     return internals, orphans
+
+
+def _closed_paths_from_polygon(poly: Polygon) -> list[list[tuple[float, float]]]:
+    paths = [[(float(x), float(y)) for x, y in poly.exterior.coords]]
+    for ring in poly.interiors:
+        paths.append([(float(x), float(y)) for x, y in ring.coords])
+    return paths
+
+
+def _merge_nested_details(polygons, snap_tol: float = 0.05):
+    """Fold even-odd "islands" inside a parent hole back into that parent.
+
+    CAD files often draw one physical part as an outer boundary plus internal
+    closed detail profiles. Pure even-odd classification turns a ring inside a
+    hole into a new solid polygon, which makes the UI/nester treat detail
+    geometry as a loose part. For nesting/export we keep that geometry as closed
+    internal cut linework on the containing part instead.
+    """
+    if len(polygons) < 2:
+        return list(polygons), {}, 0
+
+    grow = max(float(snap_tol), 1e-9)
+    absorbed_to_parent: dict[int, int] = {}
+    details_by_parent: dict[int, list[list[tuple[float, float]]]] = {}
+
+    for child_idx, child in enumerate(polygons):
+        if child.is_empty:
+            continue
+        best_parent: int | None = None
+        best_area = float("inf")
+        for parent_idx, parent in enumerate(polygons):
+            if parent_idx == child_idx or parent.area <= child.area:
+                continue
+            if parent.area >= best_area:
+                continue
+            for hole in parent.interiors:
+                try:
+                    hole_poly = Polygon(hole.coords).buffer(grow)
+                except Exception:  # noqa: BLE001
+                    continue
+                if not hole_poly.is_empty and hole_poly.covers(child):
+                    best_parent = parent_idx
+                    best_area = parent.area
+                    break
+        if best_parent is not None:
+            absorbed_to_parent[child_idx] = best_parent
+
+    if not absorbed_to_parent:
+        return list(polygons), {}, 0
+
+    # If a detail's immediate parent is itself absorbed, bubble the linework up
+    # to the nearest kept ancestor.
+    def kept_parent(idx: int) -> int:
+        seen: set[int] = set()
+        cur = idx
+        while cur in absorbed_to_parent and cur not in seen:
+            seen.add(cur)
+            cur = absorbed_to_parent[cur]
+        return cur
+
+    for child_idx, parent_idx in absorbed_to_parent.items():
+        parent_idx = kept_parent(parent_idx)
+        details_by_parent.setdefault(parent_idx, []).extend(
+            _closed_paths_from_polygon(polygons[child_idx])
+        )
+
+    index_map: dict[int, int] = {}
+    kept: list[Polygon] = []
+    for old_idx, poly in enumerate(polygons):
+        if old_idx in absorbed_to_parent:
+            continue
+        index_map[old_idx] = len(kept)
+        kept.append(poly)
+
+    remapped: dict[int, list[list[tuple[float, float]]]] = {}
+    for old_parent, paths in details_by_parent.items():
+        if old_parent not in index_map:
+            continue
+        remapped.setdefault(index_map[old_parent], []).extend(paths)
+    return kept, remapped, len(absorbed_to_parent)
 
 
 def _polygons_to_parts(polygons, stem, path, group_identical,

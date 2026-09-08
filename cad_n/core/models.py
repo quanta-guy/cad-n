@@ -298,6 +298,9 @@ class NestingSettings:
     allow_common_cut: bool = False       # later (doc 10.3)
     random_seed: int = 12345
     grid_step_mm: float = 0.0            # 0 = auto (1/4 of smallest part edge)
+    enable_genetic_search: bool = False
+    genetic_population: int = 12
+    genetic_generations: int = 8
 
     @property
     def clearance_mm(self) -> float:
@@ -330,6 +333,9 @@ class NestingSettings:
             "allow_common_cut": self.allow_common_cut,
             "random_seed": self.random_seed,
             "grid_step_mm": self.grid_step_mm,
+            "enable_genetic_search": self.enable_genetic_search,
+            "genetic_population": self.genetic_population,
+            "genetic_generations": self.genetic_generations,
         }
 
     @classmethod
@@ -347,6 +353,9 @@ class NestingSettings:
             allow_common_cut=bool(d.get("allow_common_cut", False)),
             random_seed=int(d.get("random_seed", 12345)),
             grid_step_mm=float(d.get("grid_step_mm", 0.0)),
+            enable_genetic_search=bool(d.get("enable_genetic_search", False)),
+            genetic_population=int(d.get("genetic_population", 12)),
+            genetic_generations=int(d.get("genetic_generations", 8)),
         )
 
 

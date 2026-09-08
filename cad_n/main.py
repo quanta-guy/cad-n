@@ -22,6 +22,7 @@ def _selfcheck() -> int:
     import tempfile
 
     from .core import dxf_exporter, dxf_importer
+    from .core.excel_report import write_excel_report
     from .core.models import NestingSettings, Sheet, make_rectangle_part
     from .core.nesting_engine import nest
 
@@ -37,8 +38,18 @@ def _selfcheck() -> int:
         assert rep.success
         reimp = dxf_importer.import_dxf(path)
         assert len(reimp.parts) >= 1
+        from zipfile import ZipFile
+        from xml.etree import ElementTree
+        report_path = path + ".xlsx"
+        write_excel_report(res, report_path)
+        with ZipFile(report_path) as report:
+            assert report.testzip() is None
+            rows = ElementTree.fromstring(report.read("xl/worksheets/sheet2.xml"))
+            ns = {"s": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+            assert len(rows.findall("s:sheetData/s:row", ns)) == 11
+        os.remove(report_path)
         os.remove(path)
-        log.info("SELFCHECK PASS: nested 10, exported %d profiles, reopened OK",
+        log.info("SELFCHECK PASS: nested 10, exported %d profiles, DXF and Excel reopened OK",
                  rep.cut_entities)
         return 0
     except Exception as exc:  # noqa: BLE001

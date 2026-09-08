@@ -41,8 +41,15 @@ def test_write_csv_report(tmp_path):
 
 def test_job_roundtrip(tmp_path):
     sheet = Sheet("Big", 2500, 1250, margin_mm=10, material="MS", thickness=2.0)
-    settings = NestingSettings(part_spacing_mm=3, kerf_mm=0.2, attempt_count=6,
-                               rotation_step_deg=45)
+    settings = NestingSettings(
+        part_spacing_mm=3,
+        kerf_mm=0.2,
+        attempt_count=6,
+        rotation_step_deg=45,
+        enable_genetic_search=True,
+        genetic_population=18,
+        genetic_generations=11,
+    )
     parts = [
         make_rectangle_part("A", 100, 60, quantity=4),
         Part.from_rings("ring", outer=[(0, 0), (80, 0), (80, 80), (0, 80)],
@@ -58,6 +65,9 @@ def test_job_roundtrip(tmp_path):
     assert job.sheet.width_mm == 2500 and job.sheet.margin_mm == 10
     assert math.isclose(job.settings.kerf_mm, 0.2)
     assert job.settings.attempt_count == 6
+    assert job.settings.enable_genetic_search is True
+    assert job.settings.genetic_population == 18
+    assert job.settings.genetic_generations == 11
     # geometry preserved (areas match within tolerance)
     areas_in = sorted(p.area for p in parts)
     areas_out = sorted(p.area for p in job.parts)

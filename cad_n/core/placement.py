@@ -171,12 +171,71 @@ class AttemptResult:
     sheets: list[Sheet] = field(default_factory=list)
 
 
+class FreeRectState(SheetState):
+    """Maximal free rectangles with best-short-side-fit selection.
+
+    Bounding boxes make this conservative for irregular profiles. Exact polygon
+    collision checks still apply; the original true-shape search remains a rival.
+    """
+
+    def __init__(self, sheet, settings):
+        super().__init__(sheet, settings)
+        self.free = [(self.minx, self.miny, self.maxx, self.maxy)]
+
+    def best_placement(self, variants):
+        best = None
+        best_key = None
+        for x, y, right, top in self.free:
+            for v in variants:
+                dw, dh = right - x - v.w, top - y - v.h
+                if min(dw, dh) < -_FIT_EPS:
+                    continue
+                base = translate(v.base, x, y)
+                infl = translate(v.infl, x, y)
+                if self._overlaps(infl):
+                    continue
+                key = (min(dw, dh), max(dw, dh), y, x)
+                if best_key is None or key < best_key:
+                    best_key = key
+                    best = (y, x, v, base, infl)
+        self.fit_score = best_key
+        return best
+
+    def add(self, placed_base, placed_infl):
+        super().add(placed_base, placed_infl)
+        gap = self.settings.clearance_mm
+        x0, y0, x1, y1 = placed_base.bounds
+        x0, y0, x1, y1 = x0-gap, y0-gap, x1+gap, y1+gap
+        remaining = []
+        for left, bottom, right, top in self.free:
+            if x1 <= left or x0 >= right or y1 <= bottom or y0 >= top:
+                remaining.append((left, bottom, right, top))
+                continue
+            if x0 > left:
+                remaining.append((left, bottom, x0, top))
+            if x1 < right:
+                remaining.append((x1, bottom, right, top))
+            if y0 > bottom:
+                remaining.append((left, bottom, right, y0))
+            if y1 < top:
+                remaining.append((left, y1, right, top))
+        remaining = list(dict.fromkeys(remaining))
+        self.free = [r for i, r in enumerate(remaining) if not any(
+            i != j and s[0] <= r[0] and s[1] <= r[1]
+            and s[2] >= r[2] and s[3] >= r[3]
+            for j, s in enumerate(remaining))]
+
+
 def run_attempt(
     prepared: list[PreparedPart],
     instance_order: list[int],
     bins: list[Sheet],
     settings: NestingSettings,
     open_until_fit: bool = False,
+    variant_priority: list[int | None] | None = None,
+    force_variant_choice: bool = False,
+    free_rectangles: bool = False,
+    dynamic_order: bool = False,
 ) -> AttemptResult:
     """One packing attempt into an ordered list of sheet ``bins``.
 
@@ -198,12 +257,26 @@ def run_attempt(
     if not instance_order:
         instance_order = list(range(len(instances)))
 
+    def _variants_for(inst_idx: int, pp: PreparedPart) -> list[Variant]:
+        if not variant_priority or inst_idx >= len(variant_priority) or not pp.variants:
+            return pp.variants
+        choice = variant_priority[inst_idx]
+        if choice is None:
+            return pp.variants
+        vi = int(choice) % len(pp.variants)
+        if force_variant_choice:
+            return [pp.variants[vi]]
+        return [pp.variants[vi]] + [
+            v for i, v in enumerate(pp.variants) if i != vi
+        ]
+
     states: list[SheetState] = []
     state_sheet: list[Sheet] = []
     placements: list[Placement] = []
     result = AttemptResult()
     next_idx = 0
     n_bins = len(bins)
+    state_class = FreeRectState if free_rectangles else SheetState
 
     def _place(st: SheetState, s_i: int, pp: PreparedPart, best) -> None:
         y, x, v, pbase, pinfl = best
@@ -214,11 +287,29 @@ def run_attempt(
             x_mm=x, y_mm=y, rotation_deg=v.angle, mirrored=v.mirrored,
             polygon_world=pbase, internal_world=internal_world))
 
-    for inst_idx in instance_order:
+    pending = list(instance_order)
+    while pending:
+        selected = 0
+        if dynamic_order and states:
+            best_fit = None
+            seen_parts = set()
+            for pos, idx in enumerate(pending):
+                pp = instances[idx]
+                if id(pp) in seen_parts:
+                    continue
+                seen_parts.add(id(pp))
+                for st in states:
+                    candidate = st.best_placement(_variants_for(idx, pp))
+                    if candidate is not None:
+                        score = getattr(st, "fit_score", candidate[:2])
+                        if best_fit is None or score < best_fit:
+                            best_fit, selected = score, pos
+        inst_idx = pending.pop(selected)
         pp = instances[inst_idx]
+        variants = _variants_for(inst_idx, pp)
         placed = False
         for s_i, st in enumerate(states):
-            best = st.best_placement(pp.variants)
+            best = st.best_placement(variants)
             if best is not None:
                 _place(st, s_i, pp, best)
                 placed = True
@@ -232,10 +323,10 @@ def run_attempt(
             while next_idx < n_bins:
                 sh = bins[next_idx]
                 next_idx += 1
-                st = SheetState(sh, settings)
+                st = state_class(sh, settings)
                 states.append(st)
                 state_sheet.append(sh)
-                best = st.best_placement(pp.variants)
+                best = st.best_placement(variants)
                 if best is not None:
                     _place(st, len(states) - 1, pp, best)
                     placed = True
@@ -244,8 +335,8 @@ def run_attempt(
             # Single stock size: try one fresh sheet; if it does not fit, the
             # part is too large (do not consume the bin).
             sh = bins[next_idx]
-            st = SheetState(sh, settings)
-            best = st.best_placement(pp.variants)
+            st = state_class(sh, settings)
+            best = st.best_placement(variants)
             if best is not None:
                 next_idx += 1
                 states.append(st)
