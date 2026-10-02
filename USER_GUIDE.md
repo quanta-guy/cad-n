@@ -15,8 +15,11 @@ For example, entering `Workshop` suggests `Workshop.dxf` and also writes
 `Workshop_parts.xlsx` in the same folder for
 the currently selected layout. The workbook contains sheet stock sizes, part
 counts, stock utilization, and one row per placed part with sheet number,
-part name/ID, position, rotation, mirroring, and net area in mm² and in².
-Net area subtracts holes; open internal cuts remove no area. One square inch
+part name/ID, position, rotation, mirroring, and area in mm² and in².
+Area is each part's complete enclosing rectangle: corner relief cuts, notches
+and holes are ignored, as in panel costing. Its length and width are listed
+and rounded up to the next 0.25 mm (1.1 → 1.25, 1.4 → 1.5) before the area
+is calculated. One square inch
 equals 645.16 mm². Unplaced parts, if any, appear on a separate tab.
 If the spreadsheet cannot be written (for example, it is open in Excel), the
 application reports the failure and keeps the successfully exported DXF.

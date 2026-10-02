@@ -1,13 +1,17 @@
 """Portable Excel part report using the standard Open XML ZIP format.
 
 No Office installation or additional runtime dependency is required.
-Areas are net polygon areas (holes subtracted); internal cut lines have no area.
+Areas are each part's full enclosing rectangle (minimum rotated rectangle):
+corner relief cuts, notches and holes are ignored, matching how panels are
+costed. Rectangle sides are rounded up to the next 0.25 mm before the area is
+computed. The DXF export and on-screen statistics still use true geometry.
 """
 
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from xml.etree.ElementTree import Element, SubElement, tostring
 from zipfile import ZIP_DEFLATED, ZipFile
+import math
 import os
 
 NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
@@ -44,22 +48,42 @@ def _worksheet(rows):
     return _xml(root)
 
 
+def _ceil_quarter(mm):
+    """Round up to the next 0.25 mm; the epsilon keeps exact steps (1.25) put."""
+    return math.ceil(round(mm / 0.25, 6)) * 0.25
+
+
+def _rect_dims(placement):
+    """(length, width) of the complete enclosing rectangle, ignoring corner
+    cuts and holes, each side rounded up to 0.25 mm."""
+    pts = list(placement.polygon_world.minimum_rotated_rectangle.exterior.coords)
+    sides = [math.dist(pts[0], pts[1]), math.dist(pts[1], pts[2])]
+    return tuple(_ceil_quarter(v) for v in sorted(sides, reverse=True))
+
+
+def _rect_area(placement):
+    length, width = _rect_dims(placement)
+    return length * width
+
+
 def write_excel_report(result, path):
     """Write sheet totals and individual placements for the selected layout."""
     summary = [["Sheet", "Stock", "Width (mm)", "Height (mm)", "Parts",
-                "Net part area (mm²)", "Net part area (in²)", "Stock utilization (%)"]]
+                "Part area (mm²)", "Part area (in²)", "Stock utilization (%)"]]
     parts = [["Sheet", "Part on sheet", "Part name", "Part ID", "X (mm)",
-              "Y (mm)", "Rotation (deg)", "Mirrored", "Net area (mm²)", "Net area (in²)"]]
+              "Y (mm)", "Rotation (deg)", "Mirrored", "Length (mm)", "Width (mm)",
+              "Area (mm²)", "Area (in²)"]]
     for i in range(result.sheet_count_used):
         sheet = result.sheet_at(i)
         placed = result.placements_on(i)
-        area = sum(p.area for p in placed)
+        area = sum(_rect_area(p) for p in placed)
         stock_area = sheet.width_mm * sheet.height_mm
         summary.append([i+1, sheet.name, sheet.width_mm, sheet.height_mm, len(placed),
                         area, area / 645.16, 100 * area / stock_area if stock_area else 0])
         for j, p in enumerate(placed, 1):
             parts.append([i+1, j, p.part_name, p.part_id, p.x_mm, p.y_mm,
-                          p.rotation_deg, "Yes" if p.mirrored else "No", p.area, p.area / 645.16])
+                          p.rotation_deg, "Yes" if p.mirrored else "No",
+                          *_rect_dims(p), _rect_area(p), _rect_area(p) / 645.16])
     tables = [("Sheets", summary), ("Placed parts", parts)]
     if result.unnested_parts:
         tables.append(("Unplaced parts", [["Part name", "Part ID", "Quantity", "Reason"]] + [

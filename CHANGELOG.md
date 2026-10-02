@@ -4,6 +4,15 @@ All notable changes to CAD-N are recorded here.
 
 ## [Unreleased]
 
+## [0.5.1] — 2026-10-02
+
+### Changed
+- Excel part report areas now count each part as its complete enclosing
+  rectangle, ignoring corner relief cuts, notches and holes, to match panel
+  costing. Each rectangle's length and width are listed and rounded up to the
+  next 0.25 mm before the area is calculated. DXF export and on-screen
+  statistics still use true geometry.
+
 ## [0.5.0] — 2026-09-08
 
 ### Added

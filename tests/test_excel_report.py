@@ -4,7 +4,7 @@ from xml.etree import ElementTree as ET
 import pytest
 from shapely.geometry import Polygon
 
-from cad_n.core.excel_report import write_excel_report
+from cad_n.core.excel_report import _ceil_quarter, write_excel_report
 from cad_n.core.models import NestingResult, Placement, Sheet, UnnestedPart
 
 
@@ -17,9 +17,12 @@ def _rows(archive, index):
 
 
 def test_excel_reports_each_placement_and_net_area_on_mixed_sheets(tmp_path):
-    # One square inch minus a quarter-square-inch hole.
-    poly = Polygon([(0, 0), (25.4, 0), (25.4, 25.4), (0, 25.4)],
-                   [[(0.1, 0.1), (12.8, 0.1), (12.8, 12.8), (0.1, 12.8)]])
+    # One square inch with 2 mm corner relief cuts and a hole: the report
+    # counts it as the complete square, sides rounded up 25.4 -> 25.5 mm.
+    poly = Polygon([(2, 0), (23.4, 0), (23.4, 2), (25.4, 2), (25.4, 23.4),
+                    (23.4, 23.4), (23.4, 25.4), (2, 25.4), (2, 23.4), (0, 23.4),
+                    (0, 2), (2, 2)],
+                   [[(5, 5), (12.8, 5), (12.8, 12.8), (5, 12.8)]])
     placements = [Placement("p", "=A&B", i, 0, 0, 90, False, poly) for i in range(2)]
     result = NestingResult(placements=placements, sheet_count_used=2,
                           sheets=[Sheet("A", 100, 100), Sheet("B", 200, 100)],
@@ -35,8 +38,15 @@ def test_excel_reports_each_placement_and_net_area_on_mixed_sheets(tmp_path):
     assert len(parts) == 3
     assert [r[0] for r in parts[1:]] == [1, 2]
     assert parts[1][2] == "=A&B"  # Text, never interpreted as an Excel formula.
-    assert parts[1][8] == pytest.approx(483.87)
-    assert parts[1][9] == pytest.approx(0.75)
-    assert summary[1][5] == pytest.approx(parts[1][8])
+    assert parts[1][8:10] == [25.5, 25.5]
+    assert parts[1][10] == pytest.approx(650.25)
+    assert parts[1][11] == pytest.approx(650.25 / 645.16)
+    assert summary[1][5] == pytest.approx(parts[1][10])
     assert summary[2][2] == 200
     assert failed[1] == ["Large", "q", 2, "Too large"]
+
+
+@pytest.mark.parametrize("mm, expected", [
+    (1.1, 1.25), (1.4, 1.5), (1.6, 1.75), (1.25, 1.25), (2.0, 2.0), (2.0000001, 2.0)])
+def test_dimensions_round_up_to_quarter_mm(mm, expected):
+    assert _ceil_quarter(mm) == expected

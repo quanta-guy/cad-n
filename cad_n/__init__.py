@@ -5,4 +5,4 @@ numpy, PySide6) and public nesting algorithms. MIT licensed. See README.md.
 """
 
 __app_name__ = "CAD-N"
-__version__ = "0.5.0"
+__version__ = "0.5.1"
