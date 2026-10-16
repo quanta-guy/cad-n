@@ -3,7 +3,7 @@
 ; Then compile this script with Inno Setup 6 (ISCC.exe build\installer.iss).
 
 #define MyAppName "CAD-N"
-#define MyAppVersion "0.5.1"
+#define MyAppVersion "0.5.2"
 #define MyAppPublisher "CAD-N"
 #define MyAppExeName "CAD-N.exe"
 

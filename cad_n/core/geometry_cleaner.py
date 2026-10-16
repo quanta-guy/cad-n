@@ -18,8 +18,9 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
-from shapely import make_valid
-from shapely.geometry import MultiPolygon, Polygon
+from shapely import STRtree, get_parts, line_merge, make_valid, unary_union
+from shapely.geometry import LineString, MultiPolygon, Polygon
+from shapely.geometry import Point as ShapelyPoint
 from shapely.geometry.polygon import orient
 
 from ..config import DEFAULT_TOLERANCES, Tolerances
@@ -296,12 +297,15 @@ def validate_and_repair(poly: Polygon, tol: Tolerances) -> tuple[Polygon | None,
     if poly.is_valid:
         return orient(poly, 1.0), notices
 
-    repaired = make_valid(poly)
+    # make_valid may return a Polygon, MultiPolygon or a GeometryCollection that
+    # mixes polygons with collapsed linework (e.g. holes touching along an edge).
+    pieces = [g for g in get_parts(make_valid(poly)) if isinstance(g, (Polygon, MultiPolygon))]
+    pieces = [p for g in pieces for p in get_parts(g)]
     candidate: Polygon | None = None
-    if isinstance(repaired, Polygon):
-        candidate = repaired
-    elif isinstance(repaired, MultiPolygon) and len(repaired.geoms) > 0:
-        candidate = max(repaired.geoms, key=lambda g: g.area)
+    if len(pieces) == 1:
+        candidate = pieces[0]
+    elif pieces:
+        candidate = max(pieces, key=lambda g: g.area)
         notices.append(
             Notice(
                 "A contour self-intersected and was repaired into the largest valid region.",
@@ -321,6 +325,78 @@ def validate_and_repair(poly: Polygon, tol: Tolerances) -> tuple[Polygon | None,
     return orient(candidate, 1.0), notices
 
 
+def _parallel(s: Segment, t: Segment, sin_tol: float = 1e-3) -> bool:
+    (ax, ay), (bx, by) = s
+    (cx, cy), (dx, dy) = t
+    ux, uy, vx, vy = bx - ax, by - ay, dx - cx, dy - cy
+    n = math.hypot(ux, uy) * math.hypot(vx, vy)
+    return n > 0 and abs(ux * vy - uy * vx) / n < sin_tol
+
+
+def split_at_t_junctions(segments: list[Segment], tol: float) -> list[Segment]:
+    """Split each segment where a collinear segment's endpoint lies on it.
+
+    Overlapping collinear linework (e.g. a stray LINE drawn over a polyline
+    side) otherwise shares no nodes with the edge beneath it, so the graph sees
+    two parallel edges and face-finding becomes fragile. After splitting, the
+    overlapping pieces are exact duplicates and the dedup pass keeps one."""
+    if len(segments) < 2:
+        return segments
+    tol = max(tol, 1e-9)
+    lines = [LineString(s) for s in segments]
+    ends = [ShapelyPoint(p) for s in segments for p in s]
+    hits = STRtree(lines).query(ends, predicate="dwithin", distance=tol)
+    cuts: dict[int, set[float]] = {}
+    for pi, si in hits.T:
+        oi = int(pi) // 2
+        if oi == si or not _parallel(segments[oi], segments[si]):
+            continue  # only collinear overlaps; T-junctions (edge micro-joints) stay as drawn
+        line = lines[si]
+        d = line.project(ends[pi])
+        if tol < d < line.length - tol:
+            cuts.setdefault(int(si), set()).add(d)
+    if not cuts:
+        return segments
+    out: list[Segment] = []
+    for i, seg in enumerate(segments):
+        if i not in cuts:
+            out.append(seg)
+            continue
+        line = lines[i]
+        pts = [seg[0]] + [line.interpolate(d).coords[0] for d in sorted(cuts[i])] + [seg[1]]
+        out.extend((pts[k], pts[k + 1]) for k in range(len(pts) - 1))
+    return out
+
+
+def merge_touching_holes(poly: Polygon) -> tuple[Polygon, list[list[Point]], int]:
+    """Merge holes that touch or overlap each other into one opening.
+
+    Two cutouts sharing an edge leave a zero-width web, which makes the part
+    invalid. Physically they are one opening, so union them and hand back the
+    shared edge(s) as common cut lines (cut once). Returns
+    ``(polygon, shared_edge_paths, merged_hole_count)``; untouched if valid or
+    if merging does not yield a single valid polygon."""
+    if poly.is_valid or len(poly.interiors) < 2:
+        return poly, [], 0
+    holes = [unary_union([g for g in get_parts(make_valid(Polygon(h)))
+                          if isinstance(g, (Polygon, MultiPolygon))])
+             for h in poly.interiors]
+    pairs = STRtree(holes).query(holes, predicate="intersects")
+    pairs = {(int(a), int(b)) for a, b in pairs.T if a < b}
+    if not pairs:
+        return poly, [], 0
+    merged = Polygon(poly.exterior).difference(unary_union(holes))
+    if not isinstance(merged, Polygon) or not merged.is_valid or merged.is_empty:
+        return poly, [], 0
+    shared: list[list[Point]] = []
+    for a, b in pairs:
+        common = line_merge(unary_union(
+            [g for g in get_parts(holes[a].boundary.intersection(holes[b].boundary))
+             if isinstance(g, LineString)]))
+        shared.extend([list(g.coords) for g in get_parts(common) if isinstance(g, LineString)])
+    return merged, shared, len({i for p in pairs for i in p})
+
+
 # --------------------------------------------------------------------------- #
 # Loop extraction from open segments
 # --------------------------------------------------------------------------- #
@@ -334,6 +410,7 @@ def stitch_loops(
     closed) and ``leftover_chains`` are the open polylines made from edges that
     never became part of a loop (preserved so callers can keep internal cut
     linework such as micro-joints)."""
+    segments = split_at_t_junctions(segments, tol.snap_tolerance_mm)
     weld = PointWeld(tol.snap_tolerance_mm)
     edge_set: set[tuple[int, int]] = set()
     tiny = 0
@@ -601,13 +678,27 @@ def build_polygons(
 
     # 4) Validate/repair each polygon, filter tiny ones.
     skipped_small = 0
+    merged_holes = 0
     for poly in classified:
+        poly, shared, n_merged = merge_touching_holes(poly)
+        result.internal_paths.extend(shared)
+        merged_holes += n_merged
         fixed, notices = validate_and_repair(poly, tol)
         result.notices.extend(notices)
         if fixed is None:
-            skipped_small += 1
+            if not any(n.code == "UNREPAIRABLE" for n in notices):
+                skipped_small += 1
             continue
         result.polygons.append(fixed)
+    if merged_holes:
+        result.notices.append(
+            Notice(
+                f"{merged_holes} cutout(s) touching another cutout (zero-width web) were "
+                "merged into one opening; the shared edge is kept as a common cut line.",
+                Severity.WARNING,
+                code="TOUCHING_HOLES_MERGED",
+            )
+        )
     if skipped_small:
         result.notices.append(
             Notice(

@@ -4,6 +4,21 @@ All notable changes to CAD-N are recorded here.
 
 ## [Unreleased]
 
+## [0.5.2] — 2026-10-16
+
+### Fixed
+- A panel was dropped on import when two of its cutouts shared an edge (for
+  example, two stacked slots drawn as one figure-8 polyline). Cutouts that touch
+  are now merged into one opening, and the shared edge is kept as a single
+  common cut line. A `TOUCHING_HOLES_MERGED` warning reports when this happens.
+- Lines drawn on top of another contour's edge (for example, a stray LINE over a
+  slot side) are now split and de-duplicated, so the overlap is kept once and no
+  longer makes holes disappear or import inconsistently. Lines that only meet an
+  edge at one point (edge micro-joints) are left as drawn.
+- Self-intersecting contours whose repair produced mixed geometry are now
+  recovered instead of skipped, and unrepairable contours are no longer
+  miscounted as tiny fragments.
+
 ## [0.5.1] — 2026-10-02
 
 ### Changed

@@ -170,3 +170,59 @@ def test_tiny_fragment_filtered():
     tiny = [(0, 0), (0.2, 0), (0.2, 0.2), (0, 0.2)]  # 0.04 mm^2 < 1.0 default
     res = gc.build_polygons([tiny], [], Tolerances())
     assert res.polygons == []
+
+
+def test_repair_handles_geometry_collection_from_figure_eight_hole():
+    # A figure-8 hole retracing its shared middle edge (real DXF: two stacked
+    # slots drawn as one polyline) makes make_valid return a GeometryCollection
+    # (polygon + collapsed line). The part must be kept, not dropped.
+    from shapely.geometry import Polygon
+
+    hole = [(10, 10), (30, 10), (30, 20), (10, 20), (10, 30), (30, 30), (30, 20), (10, 20)]
+    poly = Polygon([(0, 0), (100, 0), (100, 100), (0, 100)], [hole])
+    assert not poly.is_valid
+    fixed, notices = gc.validate_and_repair(poly, Tolerances())
+    assert fixed is not None and fixed.is_valid
+    assert fixed.area == pytest.approx(100 * 100 - 20 * 20)
+    assert "UNREPAIRABLE" not in {n.code for n in notices}
+
+
+def test_touching_holes_merge_into_one_opening_with_common_line():
+    # Two 20x10 cutouts sharing the y=20 edge (zero-width web, as in the real
+    # figure-8 slot pairs) become one 20x20 opening; the shared edge is kept
+    # as an internal common cut line.
+    outer = [(0, 0), (100, 0), (100, 100), (0, 100)]
+    top = [(10, 20), (30, 20), (30, 30), (10, 30)]
+    bottom = [(10, 10), (30, 10), (30, 20), (10, 20)]
+    segs = ring_segments(outer) + ring_segments(top) + ring_segments(bottom)
+    res = gc.build_polygons([], segs, Tolerances())
+    assert len(res.polygons) == 1
+    part = res.polygons[0]
+    assert part.is_valid and len(part.interiors) == 1
+    assert part.area == pytest.approx(100 * 100 - 20 * 20)
+    assert "TOUCHING_HOLES_MERGED" in {n.code for n in res.notices}
+    shared = [p for p in res.internal_paths if all(abs(y - 20) < 1e-9 for _, y in p)]
+    assert shared and sum(abs(p[-1][0] - p[0][0]) for p in shared) == pytest.approx(20)
+
+
+def test_overlapping_collinear_line_is_split_and_deduplicated():
+    # A stray LINE drawn corner-to-corner over a hole side that has a small
+    # notch (real case: LINEs over rounded slot corners) overlaps the side but
+    # shares no nodes with it. Without splitting, the hole is lost entirely.
+    outer = [(0, 0), (100, 0), (100, 100), (0, 100)]
+    hole = [(10, 20), (30, 20), (30, 40), (10, 40), (10, 32), (12, 30), (10, 28)]
+    stray = ((10, 20), (10, 40))
+    res = gc.build_polygons([], ring_segments(outer) + ring_segments(hole) + [stray], Tolerances())
+    assert len(res.polygons) == 1
+    assert len(res.polygons[0].interiors) == 1
+    assert res.polygons[0].area == pytest.approx(100 * 100 - 20 * 20)
+
+
+def test_t_junction_edge_cut_is_not_split_off_as_a_part():
+    # An open U-cut whose ends touch a part edge (edge micro-joint) stays
+    # internal linework; it must not carve a separate slug part.
+    outer = [(0, 0), (100, 0), (100, 100), (0, 100)]
+    u = [((40, 0), (40, 15)), ((40, 15), (55, 15)), ((55, 15), (55, 0))]
+    res = gc.build_polygons([], ring_segments(outer) + u, Tolerances())
+    assert len(res.polygons) == 1
+    assert res.polygons[0].area == pytest.approx(100 * 100)
