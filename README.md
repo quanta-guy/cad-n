@@ -57,7 +57,7 @@ pip install -r requirements.txt
 python -m cad_n
 ```
 
-Tested on **Python 3.11–3.14** (developed on 3.14). All dependencies install as
+Tested on **Python 3.12–3.15** (developed on 3.15; on 3.15 heavy libraries load lazily via PEP 810 for faster startup). All dependencies install as
 binary wheels.
 
 ## Run the tests

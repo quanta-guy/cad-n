@@ -4,6 +4,26 @@ All notable changes to CAD-N are recorded here.
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-10-16
+
+### Changed
+- Built and tested on **Python 3.15**. Supported range is now 3.12–3.15
+  (numpy 2.5 dropped 3.11). Dependencies upgraded: PySide6 6.12.0, Shapely
+  2.2.0, numpy 2.5.4; PyInstaller 6.22.3.
+- Faster startup: on Python 3.15, ezdxf and Shapely load lazily (PEP 810
+  `__lazy_modules__`), only when a DXF is imported/exported or parts are
+  nested. Main-window import time drops from ~580 ms to ~155 ms. Older
+  Pythons ignore the declaration and import eagerly as before.
+- Release binaries are signed: `CAD-N.exe` carries a timestamped Authenticode
+  signature (self-signed "CAD-N (quanta-guy)" certificate, `.cer` attached to
+  the release), and `SHA256SUMS.txt` plus the git tag are GPG-signed.
+
+### Fixed
+- A part outline drawn as two open polylines whose ends overshoot each other
+  (one piece ends on the other's edge, ~1 mm past the corner) was skipped as an
+  open contour, and its holes leaked out as fake parts. Leftover open linework
+  is now re-stitched at T-junctions; overshoot stubs up to 2 mm are dropped.
+
 ## [0.5.2] — 2026-10-16
 
 ### Fixed

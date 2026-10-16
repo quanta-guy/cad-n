@@ -12,6 +12,9 @@ that nest (preview + export + re-run).
 
 from __future__ import annotations
 
+# PEP 810 (Python 3.15+): defer heavy imports until first use; older Pythons ignore this.
+__lazy_modules__ = ["shapely.geometry"]
+
 import datetime as _dt
 import json
 import os

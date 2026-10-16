@@ -9,6 +9,9 @@ Correctness rules that must always hold (doc 'agent prompt' acceptance):
 
 from __future__ import annotations
 
+# PEP 810 (Python 3.15+): defer heavy imports until first use; older Pythons ignore this.
+__lazy_modules__ = ["shapely", "shapely.affinity", "shapely.geometry"]
+
 import math
 from dataclasses import dataclass, field
 from typing import Optional

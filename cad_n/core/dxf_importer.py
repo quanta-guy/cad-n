@@ -10,6 +10,9 @@ and leaders never become cut geometry unless the user explicitly includes them.*
 
 from __future__ import annotations
 
+# PEP 810 (Python 3.15+): defer heavy imports until first use; older Pythons ignore this.
+__lazy_modules__ = ["ezdxf", "shapely.geometry"]
+
 import math
 import os
 from dataclasses import dataclass, field

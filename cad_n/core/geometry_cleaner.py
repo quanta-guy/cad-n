@@ -15,6 +15,9 @@ anything suspicious (open contours, tiny fragments, self-intersections).
 
 from __future__ import annotations
 
+# PEP 810 (Python 3.15+): defer heavy imports until first use; older Pythons ignore this.
+__lazy_modules__ = ["shapely", "shapely.geometry", "shapely.geometry.polygon"]
+
 import math
 from dataclasses import dataclass, field
 
@@ -34,6 +37,10 @@ Segment = tuple[Point, Point]
 # next half-edge" rule below, the bounded interior faces come out with POSITIVE
 # signed area while the single unbounded outer face per component is negative.
 _BOUNDED_FACE_SIGN = 1.0
+
+# Dangling stub left past a T-junction once an overshooting outline is closed
+# (drafting overshoot, cuts into scrap). Shorter leftovers are dropped.
+OVERSHOOT_MAX_MM = 2.0
 
 
 @dataclass
@@ -333,13 +340,16 @@ def _parallel(s: Segment, t: Segment, sin_tol: float = 1e-3) -> bool:
     return n > 0 and abs(ux * vy - uy * vx) / n < sin_tol
 
 
-def split_at_t_junctions(segments: list[Segment], tol: float) -> list[Segment]:
+def split_at_t_junctions(segments: list[Segment], tol: float,
+                         collinear_only: bool = True) -> list[Segment]:
     """Split each segment where a collinear segment's endpoint lies on it.
 
     Overlapping collinear linework (e.g. a stray LINE drawn over a polyline
     side) otherwise shares no nodes with the edge beneath it, so the graph sees
     two parallel edges and face-finding becomes fragile. After splitting, the
-    overlapping pieces are exact duplicates and the dedup pass keeps one."""
+    overlapping pieces are exact duplicates and the dedup pass keeps one.
+    ``collinear_only=False`` also splits at true T-junctions (used only on
+    leftover open linework, see ``stitch_loops``)."""
     if len(segments) < 2:
         return segments
     tol = max(tol, 1e-9)
@@ -349,7 +359,7 @@ def split_at_t_junctions(segments: list[Segment], tol: float) -> list[Segment]:
     cuts: dict[int, set[float]] = {}
     for pi, si in hits.T:
         oi = int(pi) // 2
-        if oi == si or not _parallel(segments[oi], segments[si]):
+        if oi == si or (collinear_only and not _parallel(segments[oi], segments[si])):
             continue  # only collinear overlaps; T-junctions (edge micro-joints) stay as drawn
         line = lines[si]
         d = line.project(ends[pi])
@@ -401,7 +411,7 @@ def merge_touching_holes(poly: Polygon) -> tuple[Polygon, list[list[Point]], int
 # Loop extraction from open segments
 # --------------------------------------------------------------------------- #
 def stitch_loops(
-    segments: list[Segment], tol: Tolerances
+    segments: list[Segment], tol: Tolerances, _retry: bool = False
 ) -> tuple[list[list[Point]], int, int, int, list[list[Point]]]:
     """Stitch loose segments into closed loops.
 
@@ -465,6 +475,21 @@ def stitch_loops(
     leftover_chains = _walk_chains(weld.points, leftover_edges)
 
     coord_loops = [[weld.points[i] for i in loop] for loop in loops]
+
+    # Outlines drawn in pieces whose ends overshoot each other (one piece ends
+    # ON the other's edge, past the corner) never weld. Retry the leftover
+    # linework only, splitting at every T-junction: part edges already sit in
+    # loops, so edge micro-joints touching them are not carved into slugs.
+    if leftover_chains and not _retry:
+        segs = [(c[i], c[i + 1]) for c in leftover_chains for i in range(len(c) - 1)]
+        split = split_at_t_junctions(segs, tol.snap_tolerance_mm, collinear_only=False)
+        if len(split) > len(segs):
+            loops2, _, _, _, left2 = stitch_loops(split, tol, _retry=True)
+            if loops2:
+                coord_loops += loops2
+                # ponytail: fixed overshoot cap; make it a Tolerances field if real files need more
+                leftover_chains = [c for c in left2
+                                   if LineString(c).length > OVERSHOOT_MAX_MM]
     return coord_loops, open_chains, dup, tiny, leftover_chains
 
 

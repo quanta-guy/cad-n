@@ -17,6 +17,9 @@ operator to verify cut order / lead-ins before cutting.
 
 from __future__ import annotations
 
+# PEP 810 (Python 3.15+): defer heavy imports until first use; older Pythons ignore this.
+__lazy_modules__ = ["ezdxf", "shapely", "shapely.affinity", "shapely.geometry", "shapely.ops"]
+
 from dataclasses import dataclass, field
 from typing import Optional
 

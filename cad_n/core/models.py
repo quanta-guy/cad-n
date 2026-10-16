@@ -8,6 +8,9 @@ JSON job format (doc 7.7).
 
 from __future__ import annotations
 
+# PEP 810 (Python 3.15+): defer heavy imports until first use; older Pythons ignore this.
+__lazy_modules__ = ["shapely.geometry", "shapely.geometry.polygon"]
+
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum

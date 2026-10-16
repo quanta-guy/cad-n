@@ -13,6 +13,9 @@ keeping the ranked alternatives on the result for the operator to choose from.
 
 from __future__ import annotations
 
+# PEP 810 (Python 3.15+): defer heavy imports until first use; older Pythons ignore this.
+__lazy_modules__ = ["shapely.affinity"]
+
 import math
 import random
 import time

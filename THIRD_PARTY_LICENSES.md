@@ -10,11 +10,11 @@ folder where noted.
 | Component | Version | License | Full text |
 |---|---|---|---|
 | [ezdxf](https://github.com/mozman/ezdxf) | 1.4.4 | MIT | [`LICENSES/ezdxf-LICENSE.txt`](LICENSES/ezdxf-LICENSE.txt) |
-| [NumPy](https://numpy.org/) | 2.4.6 | BSD-3-Clause | [`LICENSES/numpy-LICENSE.txt`](LICENSES/numpy-LICENSE.txt) |
-| [Shapely](https://github.com/shapely/shapely) | 2.1.2 | BSD-3-Clause | [`LICENSES/shapely-LICENSE.txt`](LICENSES/shapely-LICENSE.txt) |
+| [NumPy](https://numpy.org/) | 2.5.4 | BSD-3-Clause | [`LICENSES/numpy-LICENSE.txt`](LICENSES/numpy-LICENSE.txt) |
+| [Shapely](https://github.com/shapely/shapely) | 2.2.0 | BSD-3-Clause | [`LICENSES/shapely-LICENSE.txt`](LICENSES/shapely-LICENSE.txt) |
 | [GEOS](https://libgeos.org/) (bundled inside the Shapely wheel) | — | **LGPL-2.1** | [`LICENSES/GEOS-LICENSE-LGPLv2.1.txt`](LICENSES/GEOS-LICENSE-LGPLv2.1.txt) |
-| [PySide6 / Qt](https://www.qt.io/qt-for-python) | 6.11.1 | **LGPL-3.0** | see "LGPL components" below |
-| [shiboken6](https://www.qt.io/qt-for-python) | 6.11.1 | LGPL-3.0 | see "LGPL components" below |
+| [PySide6 / Qt](https://www.qt.io/qt-for-python) | 6.12.0 | **LGPL-3.0** | see "LGPL components" below |
+| [shiboken6](https://www.qt.io/qt-for-python) | 6.12.0 | LGPL-3.0 | see "LGPL components" below |
 
 Copyright holders (permissive components):
 

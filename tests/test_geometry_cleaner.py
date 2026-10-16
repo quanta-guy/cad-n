@@ -106,6 +106,19 @@ def test_stitch_keeps_only_the_dangling_tail_as_leftover():
     assert (15, 15) in leftover[0]
 
 
+def test_stitch_closes_outline_halves_that_overshoot_by_1mm():
+    # TO NEST.dxf (Oct 16): a panel drawn as two open polylines whose ends run
+    # 1 mm past each other's corner (T-junctions, gap > snap). Must close into
+    # one loop, with the 1 mm overshoot stubs dropped.
+    left = [(101, 0), (0, 0), (0, 50), (101, 50)]
+    right = [(100, 0), (100, 50)]
+    segs = [(p[i], p[i + 1]) for p in (left, right) for i in range(len(p) - 1)]
+    loops, opens, dup, tiny, leftover = gc.stitch_loops(segs, Tolerances())
+    assert len(loops) == 1
+    assert abs(abs(gc._signed_area(loops[0])) - 5000) < 1e-6
+    assert leftover == []
+
+
 # --------------------------------------------------------------------------- #
 # DCEL face extraction (shared edges / vertices) -- verifies sign convention
 # --------------------------------------------------------------------------- #

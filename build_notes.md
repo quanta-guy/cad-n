@@ -7,11 +7,11 @@ Reproducible packaging of the Windows `.exe` (doc section 15).
 | Item | Value |
 |---|---|
 | OS | Windows 11 (x64) |
-| Python | 3.14.4 (also fine on 3.11–3.13) |
-| GUI | PySide6 6.11.1 (cp310-abi3 stable-ABI wheel) |
+| Python | 3.15.0 (also fine on 3.12–3.14) |
+| GUI | PySide6 6.12.0 (cp310-abi3 stable-ABI wheel) |
 | DXF | ezdxf 1.4.4 |
-| Geometry | Shapely 2.1.2 (bundled GEOS), numpy 2.4.6 |
-| Packager | PyInstaller 6.20.0 |
+| Geometry | Shapely 2.2.0 (bundled GEOS), numpy 2.5.4 |
+| Packager | PyInstaller 6.22.3 |
 | Installer | Inno Setup 6 (optional, not required to produce the exe) |
 
 All runtime dependencies are pinned in `requirements.txt`; dev/build tools in
